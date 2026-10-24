@@ -840,10 +840,10 @@ repeat. It is meant to be written early, to set the defaults from real mail.
   deletion history.
 - In the measured mailbox, about 1.4% of base64 attachments (600 of 43k)
   and 475 decorations did not round-trip with a fixed line length. With
-  `layout` all but 48 stub; in a sample of those, the run cap counted
-  lines and was too tight for 2047-character lines, and some encoders
-  left non-zero padding bits (both now handled, see "Recipes"). What is
-  left after that is not yet measured.
+  `layout` and `pad_bits` (see "Recipes"), 6 attachments in 2 messages
+  (about 3 MB) still go to copy. Both have periodic layouts (a blank line
+  after every line; lines alternating 64 and 8 characters), which runs
+  cannot express. Left as copy unless more mail shows the same pattern.
 
 ## Not planned (for now)
 
