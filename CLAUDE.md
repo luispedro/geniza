@@ -6,7 +6,8 @@ as real files.
 
 - `DESIGN.md` is the specification: on-disk formats, sync, matching, config.
 - `PLAN.md` is the milestone plan (M0–M10). Work milestone by milestone and
-  stop at the gate after M3 (`geniza stats --parts` on real mail).
+  stop at the gate after M3 (`geniza stats --parts` on real mail). The first
+  release is JMAP only (Fastmail as reference): M9 (IMAP) comes after it.
 
 When behaviour or a format changes, update `DESIGN.md` in the same commit.
 If the design turns out to be wrong or ambiguous, raise it rather than
@@ -26,7 +27,8 @@ silently diverging.
   - `pixi run geniza …` — the CLI
 - Add dependencies with `pixi add` (or `pixi add --feature test …`) so the
   lock file is updated. Runtime dependencies are deliberately minimal
-  (`imapclient`, `cryptography`); ask before adding another one.
+  (`cryptography`; `imapclient` is added with IMAP in M9); ask before
+  adding another one.
 
 ## Invariants (do not break)
 

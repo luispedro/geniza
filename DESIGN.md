@@ -13,12 +13,17 @@ store designed to be:
 In scope (v1):
 
 - One-way sync: server → local. Nothing is ever written to the server.
-- IMAP (with CONDSTORE/QRESYNC when available) and JMAP.
+- JMAP, with Fastmail as the reference server: it is the only server the
+  first release is tested against. Other JMAP servers may work.
 - Several stores per configuration, each holding several accounts.
 - Full-text search via a rebuildable local index.
 
 Out of scope for now:
 
+- IMAP (with CONDSTORE/QRESYNC when available), including Gmail. It is
+  designed below and comes after the first release. The on-disk formats
+  already cover it (`rid`/`eid`, `reset` events, the `imap` and `identity`
+  fields of `sync.json`), so adding it needs no format version bump.
 - Pushing local changes (flags, moves, deletions) back to the server.
 - Serving mail to local clients (Maildir view, local JMAP/IMAP server).
   The format must not preclude this, but nothing is designed for it yet.
@@ -110,7 +115,7 @@ type = "jmap"
 url = "https://api.fastmail.com/jmap/session"
 token = "sshcrypt:U1NIQ1JZUFQyAG3k…"           # see Secrets
 
-[accounts.uni]
+[accounts.uni]                # IMAP: after the first release
 store = "work"
 type = "imap"
 host = "imap.example.edu"
@@ -130,6 +135,8 @@ exclude = ["junk"]
 - Store settings (`[attachments]`, `[incoming]`) are merged key by key:
   built-in default ← top-level table ← `[stores.<name>.…]`.
 - Secrets never appear in the file in plain text (see Secrets).
+- Until IMAP is implemented, an account with `type = "imap"` is rejected
+  with an error saying so, rather than ignored.
 - Renaming an account would orphan its `state/<account>/` directory, so a
   rename is an explicit `geniza account rename OLD NEW`, which moves the
   directory and updates the configuration.
@@ -699,6 +706,8 @@ exclude = []              # mailbox names (IMAP) or roles, e.g. ["junk"]
 
 ### IMAP (per mailbox)
 
+Not in the first release.
+
 1. `EXAMINE` (read-only, so not even `\Recent` is cleared; with `QRESYNC`
    when supported). If UIDVALIDITY changed, journal `reset` and treat every
    message as new (deduplication avoids downloads).
@@ -715,6 +724,10 @@ Gmail (later): sync only `[Gmail]/All Mail`, map `X-GM-LABELS` to mailbox
 membership and use `X-GM-MSGID` as the remote id.
 
 ### JMAP
+
+Authentication is a Bearer API token (Fastmail's API tokens; a read-only
+token with only the Email scope is enough and recommended). Limits such as
+`maxObjectsInGet` come from the session object, never hard-coded.
 
 1. Fetch the session; `Mailbox/changes` (or `Mailbox/get` initially) → `mbox` events.
 2. `Email/changes` since `email_state` (fall back to a full `Email/query` on
@@ -763,6 +776,9 @@ With 1–3 the id is recorded as `eid` in the journal, and an `eid` seen
 before maps straight to its stored message with no further fetch.
 
 The chosen method is recorded as `identity` in `sync.json`.
+
+The first release is JMAP only, so it implements only `jmap`; the other
+three, and the warning below, come with IMAP.
 
 #### Warning when there is no reliable id
 
@@ -860,10 +876,11 @@ repeat. It is meant to be written early, to set the defaults from real mail.
   re-serialised `email.message` object.
 - JMAP: plain HTTP + JSON; stdlib `urllib` is enough, with downloads streamed
   to temp files.
-- IMAP: `imapclient` (CONDSTORE/QRESYNC response parsing).
 - Secrets: `cryptography` (AES-GCM, HKDF, Ed25519/RSA signature
-  verification), none of which the standard library provides.
-- These two are the only planned third-party dependencies.
+  verification), none of which the standard library provides. It is the
+  only third-party dependency of the first release.
+- IMAP (after the first release): `imapclient` (CONDSTORE/QRESYNC response
+  parsing), the only other planned dependency.
 
 ## Open questions
 

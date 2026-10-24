@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "One-way mail archiver into a borg-friendly, searchable local store"
 authors = [{ name = "Luis Pedro Coelho", email = "luis@luispedro.org" }]
 requires-python = ">=3.15"
-dependencies = ["imapclient", "cryptography"]
+dependencies = ["cryptography"]
 
 [project.scripts]
 geniza = "geniza.cli:main"
@@ -22,7 +22,6 @@ platforms = ["linux-64"]
 
 [tool.pixi.dependencies]
 python = "3.15.*"
-imapclient = "*"
 cryptography = "*"
 
 [tool.pixi.pypi-dependencies]

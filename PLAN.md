@@ -1,6 +1,8 @@
 # geniza — implementation plan
 
-How to get from `DESIGN.md` to a working one-way archiver. Each milestone ends
+How to get from `DESIGN.md` to a working one-way archiver. The first
+release is JMAP only, with Fastmail as the reference server: M0–M8 and M10.
+IMAP (M9) comes after it. Each milestone ends
 in something that can be run and tested on its own. Milestones 1–3 need no
 network and write nothing, and produce the numbers that set the defaults the
 design leaves open.
@@ -23,15 +25,16 @@ Environments and dependencies (all available on conda-forge for 3.15):
 
 | Feature | Packages | Purpose |
 |---|---|---|
-| default | `python 3.15.*`, `imapclient`, `cryptography` | runtime |
+| default | `python 3.15.*`, `cryptography` | runtime (`imapclient` joins with M9) |
 | `test` | `pytest`, `hypothesis`, `zstd` (CLI), `openssh` | unit and property tests; `zstdcat` compatibility tests; a real `ssh-agent` for sshcrypt tests |
 | `lint` | `ruff`, `mypy` | formatting, linting, type checking |
 
 pixi tasks: `test`, `lint`, `fmt`, `typecheck`, and `geniza` itself
 (`pixi run geniza …`).
 
-Runtime dependencies stay minimal: `imapclient` and `cryptography` are the
-only planned third-party packages. zstd (`compression.zstd`), TOML (`tomllib`), SQLite and
+Runtime dependencies stay minimal: `cryptography` is the only third-party
+package of the first release, and `imapclient` the only other one planned
+(for M9). zstd (`compression.zstd`), TOML (`tomllib`), SQLite and
 MIME handling come from the standard library.
 
 ## Package layout
@@ -64,8 +67,8 @@ src/geniza/
   sync/
     base.py             # source interface shared by JMAP and IMAP
     jmap.py
-    imap.py
-    matching.py         # stable ids and header-verified matching
+    imap.py             # M9, after the first release
+    matching.py         # stable ids and header-verified matching (M9)
   stats.py              # stats --parts
 tests/
   corpus/               # synthetic messages, one per tricky case
@@ -211,12 +214,16 @@ search results as the incrementally maintained index.
   trash, expunge, restore, empty listing).
 
 **Done when:** every scenario in the evaluation section of DESIGN.md has a
-test, including the IMAP move race and an empty listing tripping the guard.
+test, including the IMAP move race (scripted in the fake source, since the
+two-run rule applies to every source) and an empty listing tripping the
+guard.
 
 ### M8 — JMAP sync
 
-JMAP first: its ids are exact and its change tracking is simple, so it is
-the cheaper way to get end-to-end sync working.
+The only sync of the first release: JMAP ids are exact and its change
+tracking is simple. Fastmail is the reference server; nothing
+Fastmail-specific is hard-coded (limits come from the session), but no other
+server is tested.
 
 - Session discovery, `Mailbox/get`/`changes`, `Email/changes`, `Email/get`
   in `maxObjectsInGet` batches, streamed blob downloads, the
@@ -235,16 +242,18 @@ the cheaper way to get end-to-end sync working.
     `ssh-agent` for one end-to-end round trip; and a fixture encrypted by
     the original `sshcrypt.py` with a throwaway test key (committed with
     the test) that must still decrypt, to pin compatibility.
-- Authentication with an API token. A read-only token is recommended in the
-  docs.
+- Authentication with a Bearer API token. A read-only token is recommended
+  in the docs.
+- Matching uses `emailId` only (`identity = "jmap"`); `type = "imap"`
+  accounts are rejected by `config.py`.
 - Tests against an in-process fake JMAP server (stdlib `http.server`).
-  Manual testing against a real account with a read-only token.
+  Manual testing against a real Fastmail account with a read-only token.
 
-**Done when:** the first sync of a real account completes, a second sync
-with no changes downloads nothing, and moves and flag changes show up as
-journal events only.
+**Done when:** the first sync of a real Fastmail account completes, a second
+sync with no changes downloads nothing, and moves and flag changes show up
+as journal events only.
 
-### M9 — IMAP sync
+### M9 — IMAP sync (after the first release)
 
 - `imapclient`; capability detection; CONDSTORE/QRESYNC, with plain
   fallbacks; UIDVALIDITY resets.
@@ -265,11 +274,11 @@ and a message moved between folders is matched without re-downloading.
   sync a day's mail, `borg create` again, and report the deduplicated size
   added. It should be close to the size of the new mail.
 - `compact` stays out of scope; `verify` reports orphaned attachments.
-- First release.
+- First release (JMAP only; does not wait for M9).
 
 ## Order and gates
 
 M0 → M1 → M2 → M3 is the critical path. **After M3, stop and run it on real
 mail**: the defaults, and possibly the classification rules, change with what
-it finds. M4–M7 then need no network. M8 and M9 can be done in either order;
-JMAP comes first only because it is simpler.
+it finds. M4–M7 then need no network. M8 and M10 complete the first release;
+M9 (IMAP) follows it.
