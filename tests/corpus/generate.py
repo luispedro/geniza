@@ -737,6 +737,38 @@ def html_related_alternative() -> bytes:
     )
 
 
+@case("related_non_image_content_id")
+def related_non_image_content_id() -> bytes:
+    """multipart/related with Content-IDs on non-image parts: a PDF shown
+    inline in the HTML, and an unnamed octet-stream. Only the image is a
+    decoration."""
+    return crlf(
+        headers("Signed contract", mid(39))
+        + 'Content-Type: multipart/related; boundary="rel"; type="text/html"\n\n'
+        + "--rel\n"
+        + "Content-Type: text/html; charset=utf-8\n\n"
+        + '<p>Signed copy attached.</p><img src="cid:logo@example.org">'
+        + '<object data="cid:contract@example.org"></object>\n'
+        + "--rel\n"
+        + "Content-Type: image/png\n"
+        + "Content-ID: <logo@example.org>\n"
+        + "Content-Transfer-Encoding: base64\n\n"
+        + b64(png(39))
+        + "--rel\n"
+        + 'Content-Type: application/pdf; name="contract.pdf"\n'
+        + 'Content-Disposition: inline; filename="contract.pdf"\n'
+        + "Content-ID: <contract@example.org>\n"
+        + "Content-Transfer-Encoding: base64\n\n"
+        + b64(pdf(39))
+        + "--rel\n"
+        + "Content-Type: application/octet-stream\n"
+        + "Content-ID: <blob@example.org>\n"
+        + "Content-Transfer-Encoding: base64\n\n"
+        + b64(blob(39, 500))
+        + "--rel--\n"
+    )
+
+
 @case("delivery_status")
 def delivery_status() -> bytes:
     """A bounce: multipart/report with delivery-status and the original

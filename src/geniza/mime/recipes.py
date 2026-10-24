@@ -51,7 +51,7 @@ class Mode(StrEnum):
 @dataclass(frozen=True)
 class Policy:
     min_size: int = 1
-    decoration_min_size: int = 256 * KiB
+    decoration_min_size: int = 64 * KiB
 
 
 @dataclass(frozen=True)

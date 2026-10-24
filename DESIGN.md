@@ -88,7 +88,7 @@ default_store = "personal"   # optional; otherwise --store is needed with severa
 # Defaults for every store; each key can be overridden per store.
 [attachments]
 min_size = 1
-decoration_min_size = "256KiB"
+decoration_min_size = "64KiB"
 
 [incoming]
 mailboxes = ["INBOX"]
@@ -327,11 +327,15 @@ Every leaf MIME part falls into exactly one class, checked in this order:
    `application/x-pkcs7-mime`, and every part of a `multipart/encrypted`
    (the PGP/MIME ciphertext part is usually `encrypted.asc`, but it is not
    an attachment). Never extracted.
-3. **Decoration** — a part with a `Content-ID` inside `multipart/related`
-   (images referenced from HTML via `cid:`), or an inline `image/*` part
-   without a filename. Logos, signature images, pasted screenshots.
-   This rule comes before the next one because Outlook gives decorations
-   filenames (`image001.png`).
+3. **Decoration** — an `image/*` part that either has a `Content-ID`
+   inside `multipart/related` (images referenced from HTML via `cid:`) or
+   is inline without a filename. Logos, signature images, pasted
+   screenshots. This rule comes before the next one because Outlook gives
+   decorations filenames (`image001.png`). Non-image parts with a
+   `Content-ID` (a PDF shown inline, `application/octet-stream`, Outlook's
+   `.wmz` drawings) go on to the next rules: in real mail some of them are
+   attachments, and there are few enough that extracting them all costs
+   little.
 4. **Attachment** — any other part with a filename (`Content-Disposition`
    `filename` or `Content-Type` `name`) or with `Content-Disposition:
    attachment`. The filename, not the disposition, is the main signal:
@@ -349,12 +353,35 @@ Policy:
 ```toml
 [attachments]
 min_size = 1                     # attachments: extract even a 300-byte .patch
-decoration_min_size = "256KiB"   # decorations: only large pasted images
+decoration_min_size = "64KiB"    # decorations: pasted images, not small logos
 ```
 
 Attachments are what the sender meant to send, so they are extracted
 regardless of size: small `.py`, `.patch`, `.md` files are valuable on disk
 as-is. Decorations are extracted only when large.
+
+The default comes from `geniza stats --parts` on a personal Maildir
+(331k unique messages, 52.5 GB; 42k attachments, 26 GB decoded; 63k
+decorations, 6.3 GB decoded, but only 13k distinct blobs). File counts
+and bytes count each distinct blob once; inline bytes are what stays in
+message records, before compression:
+
+| `decoration_min_size` | files  | decoration files | file bytes | inline bytes |
+|-----------------------|--------|------------------|------------|--------------|
+| 16 KiB                | 41,968 | 7,861            | 24.18 GB   | 9.68 GB      |
+| 64 KiB                | 38,748 | 4,465            | 24.06 GB   | 10.30 GB     |
+| 128 KiB               | 37,388 | 3,030            | 23.94 GB   | 11.09 GB     |
+| 256 KiB               | 36,215 | 1,790            | 23.72 GB   | 11.99 GB     |
+| 1 MiB                 | 34,946 | 449              | 23.06 GB   | 14.94 GB     |
+
+Lowering the threshold saves much more inline than it adds in files,
+because a pasted image is re-sent with every reply in a thread and is
+stored once as a file. Net saving per extra file: about 1.8 MB from 1 MiB
+to 256 KiB, 530 KB from 256 KiB to 64 KiB, and 150 KB from 64 KiB to
+16 KiB, where the extra files are mostly signature logos. 64 KiB is the
+knee: below it, each extra file saves little, and at 16 KiB decorations
+would make up a fifth of `attachments/`. zstd recovers part of the base64
+overhead of inline images, so the real differences are somewhat smaller.
 
 ### Extraction modes
 
@@ -767,8 +794,13 @@ repeat. It is meant to be written early, to set the defaults from real mail.
 
 ## Open questions
 
-- Defaults for `decoration_min_size`, `max_age` and the mass-drop guard
-  are guesses until `stats --parts` has been run on real mailboxes.
+- Defaults for `max_age` and the mass-drop guard are guesses. `stats
+  --parts` cannot inform them: a Maildir has no server receive dates or
+  deletion history.
+- In the measured mailbox, about 1.4% of base64 attachments (584 of 42k)
+  and 493 decorations did not round-trip and fell back to copy (or stayed
+  inline). The cause has not been looked at yet; it may be a recipe that
+  is too strict.
 
 ## Not planned (for now)
 

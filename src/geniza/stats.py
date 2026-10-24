@@ -234,7 +234,6 @@ class Totals:
     # decorations that can be stubbed: digest -> (decoded size, occurrences)
     decoration_blobs: Counter[bytes] = field(default_factory=Counter)
     decoration_blob_sizes: dict[bytes, int] = field(default_factory=dict)
-    decorations_non_image: int = 0
     decorations_with_filename: int = 0
     examples: dict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
     decoration_examples: dict[bytes, str] = field(default_factory=dict)
@@ -292,9 +291,6 @@ class Totals:
             cs.modes["stubbable" if p.stubbable else "never stubbable"] += 1
             if p.reason:
                 cs.reasons[p.reason] += 1
-            if not p.content_type.startswith("image/"):
-                self.decorations_non_image += 1
-                self.example("decoration not image/*", msg)
             if p.has_filename:
                 self.decorations_with_filename += 1
             if p.stubbable and p.digest is not None:
@@ -366,7 +362,6 @@ class Totals:
                 "unique_blobs": len(self.attachment_blobs),
             },
             "decorations": {
-                "not_image": self.decorations_non_image,
                 "with_filename": self.decorations_with_filename,
                 "stubbable_occurrences": sum(self.decoration_blobs.values()),
                 "unique_blobs": len(self.decoration_blobs),
@@ -421,7 +416,7 @@ def _text_report(r: dict[str, Any]) -> str:
                 f"  files: {a['unique_blobs']} unique of {a['occurrences']} extracted"
             )
     lines.append(
-        f"  not image/*: {d['not_image']}; with a filename: {d['with_filename']}; "
+        f"  with a filename: {d['with_filename']}; "
         f"stubbable: {d['unique_blobs']} unique of {d['stubbable_occurrences']}"
     )
     rep = ", ".join(f"{k}x: {v}" for k, v in d["repeat_histogram"].items())

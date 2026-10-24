@@ -82,6 +82,12 @@ EXPECTED: dict[str, list[tuple[str, str, str]]] = {
         ("2", C, INLINE),
     ],
     "plain_text_crlf": [("1", B, INLINE)],
+    "related_non_image_content_id": [
+        ("1", B, INLINE),
+        ("2", D, STUB),
+        ("3", A, STUB),  # a Content-ID, but not an image
+        ("4", OTHER, INLINE),  # no filename either
+    ],
     "plain_text_lf": [("1", B, INLINE)],
     "qp_text_attachments": [("1", B, INLINE), ("2", A, COPY), ("3", A, COPY)],
     "single_part_attachment": [("1", A, STUB)],

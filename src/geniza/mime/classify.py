@@ -148,12 +148,9 @@ def _leaf_class(
         return PartClass.BODY
     if part.content_type in CRYPTO_TYPES or in_encrypted:
         return PartClass.CRYPTO
-    if in_related and part.content_id:
-        return PartClass.DECORATION
-    if (
-        part.maintype == "image"
-        and part.disposition in (None, "inline")
-        and not has_filename(part)
+    if part.maintype == "image" and (
+        (in_related and part.content_id)
+        or (part.disposition in (None, "inline") and not has_filename(part))
     ):
         return PartClass.DECORATION
     if has_filename(part) or _is_attachment_disposition(part):

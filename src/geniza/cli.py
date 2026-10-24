@@ -32,7 +32,7 @@ class Output:
     def result(self, summary: str, data: Any) -> None:
         """Print ``summary`` as text, or ``data`` as JSON with ``--json``."""
         if self.as_json:
-            json.dump(data, sys.stdout, indent=2, sort_keys=True)
+            json.dump(data, sys.stdout, indent=2)
             sys.stdout.write("\n")
         else:
             sys.stdout.write(summary)

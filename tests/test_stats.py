@@ -37,9 +37,20 @@ def test_maildir(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert r["with_defects"] == 2
     classes = r["classes"]
     assert classes["crypto"]["count"] == 4
-    assert classes["decoration"]["count"] == 4
+    assert classes["decoration"]["count"] == 5
+    # JSON keeps the report's order: size buckets ascending, not sorted as text.
+    assert list(classes["body"]["histogram"]) == [
+        "<1KiB",
+        "<4KiB",
+        "<16KiB",
+        "<64KiB",
+        "<256KiB",
+        "<1MiB",
+        "<4MiB",
+        ">=4MiB",
+    ]
     att = classes["attachment"]
-    assert att["modes"] == {"stub": 32, "copy": 5, "inline": 1}
+    assert att["modes"] == {"stub": 33, "copy": 5, "inline": 1}
     # The forwarded PDF is the same blob as the original.
     assert r["attachments"]["unique_blobs"] == r["attachments"]["occurrences"] - 1
     # With every decoration below 16 KiB, no threshold extracts one.
@@ -56,7 +67,7 @@ def test_mbox_matches_maildir(
     box.close()
     r = run_json(capsys, str(tmp_path / "corpus.mbox"))
     assert r["messages"] == len(corpus_files())
-    assert r["classes"]["attachment"]["modes"]["stub"] == 32
+    assert r["classes"]["attachment"]["modes"]["stub"] == 33
 
 
 def test_parallel_matches_serial(
