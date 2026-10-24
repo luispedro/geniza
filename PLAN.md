@@ -23,15 +23,15 @@ Environments and dependencies (all available on conda-forge for 3.15):
 
 | Feature | Packages | Purpose |
 |---|---|---|
-| default | `python 3.15.*`, `imapclient` | runtime |
-| `test` | `pytest`, `hypothesis`, `zstd` (CLI) | unit and property tests; `zstdcat` compatibility tests |
+| default | `python 3.15.*`, `imapclient`, `cryptography` | runtime |
+| `test` | `pytest`, `hypothesis`, `zstd` (CLI), `openssh` | unit and property tests; `zstdcat` compatibility tests; a real `ssh-agent` for sshcrypt tests |
 | `lint` | `ruff`, `mypy` | formatting, linting, type checking |
 
 pixi tasks: `test`, `lint`, `fmt`, `typecheck`, and `geniza` itself
 (`pixi run geniza …`).
 
-Runtime dependencies stay minimal: `imapclient` is the only planned
-third-party package. zstd (`compression.zstd`), TOML (`tomllib`), SQLite and
+Runtime dependencies stay minimal: `imapclient` and `cryptography` are the
+only planned third-party packages. zstd (`compression.zstd`), TOML (`tomllib`), SQLite and
 MIME handling come from the standard library.
 
 ## Package layout
@@ -43,6 +43,7 @@ src/geniza/
   __main__.py           # python -m geniza
   cli.py                # argparse subcommands
   config.py             # tomllib config loading and validation
+  sshcrypt.py           # ssh-agent client and sshcrypt: secret format
   mime/
     tree.py             # raw-bytes MIME part tree with byte offsets
     classify.py         # body / crypto / decoration / attachment / other
@@ -220,9 +221,22 @@ the cheaper way to get end-to-end sync working.
 - Session discovery, `Mailbox/get`/`changes`, `Email/changes`, `Email/get`
   in `maxObjectsInGet` batches, streamed blob downloads, the
   `cannotCalculateChanges` fallback.
-- Authentication with an API token read from a command
-  (`token_command = "pass show mail/fastmail"`), never stored in the config
-  file. A read-only token is recommended in the docs.
+- **Secrets first**, since this is the first code that needs one
+  (DESIGN.md, "Secrets"):
+  - `sshcrypt.py`: a reimplementation of the standalone `sshcrypt.py` as a
+    module, with the same wire format, plus bounds-checked parsing, the
+    sign-twice determinism check, and an explicit key choice.
+  - `token`/`password` (`sshcrypt:`) and `*_command` resolution in
+    `config.py`, with plain-text values rejected.
+  - `geniza secret keys`, `encrypt`, `check`.
+  - Tests: a fake agent (an in-process Unix-socket server holding Ed25519
+    and RSA keys) for the protocol and its failure modes (refusal, a wrong
+    or invalid signature, a randomising signer, truncated replies); a real
+    `ssh-agent` for one end-to-end round trip; and a fixture encrypted by
+    the original `sshcrypt.py` with a throwaway test key (committed with
+    the test) that must still decrypt, to pin compatibility.
+- Authentication with an API token. A read-only token is recommended in the
+  docs.
 - Tests against an in-process fake JMAP server (stdlib `http.server`).
   Manual testing against a real account with a read-only token.
 

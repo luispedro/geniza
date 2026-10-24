@@ -108,7 +108,7 @@ max_age = "14d"
 store = "personal"
 type = "jmap"
 url = "https://api.fastmail.com/jmap/session"
-token_command = "pass show mail/fastmail"
+token = "sshcrypt:U1NIQ1JZUFQyAG3k…"           # see Secrets
 
 [accounts.uni]
 store = "work"
@@ -129,10 +129,92 @@ exclude = ["junk"]
   (`~/.local/share`, `~/.cache`) when the variables are unset.
 - Store settings (`[attachments]`, `[incoming]`) are merged key by key:
   built-in default ← top-level table ← `[stores.<name>.…]`.
-- Secrets never appear in the file: they are read from `*_command` output.
+- Secrets never appear in the file in plain text (see Secrets).
 - Renaming an account would orphan its `state/<account>/` directory, so a
   rename is an explicit `geniza account rename OLD NEW`, which moves the
   directory and updates the configuration.
+
+## Secrets
+
+Each secret field (`password` for IMAP, `token` for JMAP) is given in one
+of two ways, and exactly one must be present:
+
+- **`<field> = "sshcrypt:<base64>"`** — encrypted in the config file, and
+  decryptable only while the right SSH key is loaded in `ssh-agent`.
+- **`<field>_command = "…"`** — run through the shell; its stdout, minus a
+  trailing newline, is the secret. For users of `pass`, keyrings, etc.
+
+A plain-text value (anything without the `sshcrypt:` prefix) is rejected
+with an error that points to `geniza secret encrypt`.
+
+### sshcrypt
+
+The key is derived from an SSH signature, so it exists only while the SSH key
+is in the agent. geniza talks to the agent socket (`SSH_AUTH_SOCK`)
+directly, so there is no code path that reads a private key off disk.
+
+- **Derivation:** ask the agent to sign `MAGIC ‖ salt`, verify the signature
+  against the public key (so a rogue agent cannot return bytes it chose),
+  then `key = HKDF-SHA256(sig, salt, info)`. The secret is encrypted with
+  AES-256-GCM.
+- **Deterministic signatures only:** Ed25519 and RSA (`rsa-sha2-512`, PKCS#1
+  v1.5). ECDSA randomises every signature and `sk-*` (FIDO) keys embed a
+  counter, so the key could never be derived again; they are refused.
+- **Binary format** (base64-encoded after the `sshcrypt:` prefix):
+
+  ```
+  MAGIC "SSHCRYPT2\0" (10) ‖ sha256(public key blob) (32) ‖ salt (16) ‖ nonce (12) ‖ ciphertext+tag
+  ```
+
+  This is the format of the existing standalone `sshcrypt.py` tool, so the
+  two remain interchangeable: `sshcrypt.py dec` can decrypt a geniza secret,
+  and vice versa.
+
+geniza reimplements the scheme as a library module rather than vendoring the
+script. Compared to `sshcrypt.py`, the module:
+
+- checks bounds when parsing agent replies and ciphertexts, raising a
+  single error type instead of `struct.error`/`IndexError`, or silently
+  short reads;
+- on encryption, signs twice and refuses the key if the two signatures
+  differ. This catches agents or tokens that randomise Ed25519 or RSA
+  signatures before anything is encrypted to them, rather than when the
+  secret can no longer be decrypted;
+- takes the key to encrypt to as an explicit choice (`--key FINGERPRINT`)
+  instead of the agent's first usable key;
+- never prints; output belongs to the CLI.
+
+Commands:
+
+```
+geniza secret keys                         # keys in the agent, and whether they are usable
+geniza secret encrypt [--key FINGERPRINT]  # reads the secret with getpass, prints "sshcrypt:…"
+geniza secret check                        # decrypts every secret in the config, prints OK/error per account, never the secret
+```
+
+`encrypt` reads the secret from the terminal (or stdin when it is not a
+terminal), never from arguments, which would leave it in shell history and
+`ps`.
+
+### Properties and limits
+
+- Secrets are decrypted only when needed (once per account per run), held in
+  memory, and never logged, put in exceptions, or written to the store or
+  cache.
+- **Anyone who can use the agent can decrypt.** With agent forwarding, that
+  includes root on every host the agent is forwarded to, if they also get the
+  config file.
+- **Unattended syncs** (systemd timers, cron) need `SSH_AUTH_SOCK` in their
+  environment, and a key added with `ssh-add -c` (confirm every use) will
+  prompt on each run. Either is the user's choice; `geniza secret check`
+  shows whether a given environment can decrypt.
+- **Losing the SSH key loses the secrets.** That is acceptable, since mail
+  passwords and tokens can be reissued. Re-encrypting to a new key is
+  `secret encrypt` again.
+- The ciphertext is not bound to its account. Copying one account's value to
+  another account's field works, and decrypts. Binding it would not add
+  protection: anyone who can edit the config can already set a
+  `*_command`, which runs arbitrary code.
 
 ## Message identity
 
@@ -657,8 +739,10 @@ repeat. It is meant to be written early, to set the defaults from real mail.
   re-serialised `email.message` object.
 - JMAP: plain HTTP + JSON; stdlib `urllib` is enough, with downloads streamed
   to temp files.
-- IMAP: `imapclient` (CONDSTORE/QRESYNC response parsing), the only planned
-  third-party dependency.
+- IMAP: `imapclient` (CONDSTORE/QRESYNC response parsing).
+- Secrets: `cryptography` (AES-GCM, HKDF, Ed25519/RSA signature
+  verification), none of which the standard library provides.
+- These two are the only planned third-party dependencies.
 
 ## Open questions
 

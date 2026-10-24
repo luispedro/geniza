@@ -26,7 +26,7 @@ silently diverging.
   - `pixi run geniza …` — the CLI
 - Add dependencies with `pixi add` (or `pixi add --feature test …`) so the
   lock file is updated. Runtime dependencies are deliberately minimal
-  (`imapclient` only); ask before adding another one.
+  (`imapclient`, `cryptography`); ask before adding another one.
 
 ## Invariants (do not break)
 
@@ -60,10 +60,18 @@ silently diverging.
 - Network code is tested against in-process fakes (JMAP) or a Dovecot
   container when available (IMAP); integration tests that need a container
   skip themselves otherwise.
+- **Never touch the developer's ssh-agent.** Tests (and any scripts) that
+  need an agent start their own, on a short socket path (Unix socket paths
+  are limited to ~108 bytes, so not under a deep temp directory), check that
+  it is running and that `SSH_AUTH_SOCK` points to it, and only then load
+  keys. Never run `ssh-add -D` or `-d` against an inherited `SSH_AUTH_SOCK`.
+- `tests/fixtures/sshcrypt/` holds throwaway keys and ciphertexts made with
+  the original `sshcrypt.py`; never regenerate them with real keys.
 
 ## Security and privacy
 
-- Secrets come only from `*_command` config entries; never log them, put
+- Secrets come only from `sshcrypt:` values or `*_command` config entries
+  (DESIGN.md, "Secrets"); plain-text values are rejected. Never log them, put
   them in exceptions, or write them to the store or cache.
 - Logs and `--json` output may contain addresses and subjects at `-v`;
   default output should be summaries.
