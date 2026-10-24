@@ -335,6 +335,15 @@ geniza itself reads exactly `stripped_size` bytes and loses nothing.
 }
 ```
 
+Offsets are in the stripped message. Entries are in byte order and do not
+overlap. The recipe fields (`enc` to `final_eol`) appear only on stubs: a
+copy's encoded body is still in the message and needs no re-encoding, so
+its entry ends at `file`. Decorations are never copies. Optional fields are
+written only when they differ from their default (no `layout`, `pad_bits`
+0, `crlf_to_lf` false), and a reader rejects an entry that is not exactly
+what a writer would write (unknown keys, an optional field set to its
+default, a `file` outside `attachments/` or not named for its blob).
+
 `frame_size` lets a scanner skip bodies without decompressing them, so the
 index can be rebuilt from headers alone (bodies are needed only for FTS).
 
