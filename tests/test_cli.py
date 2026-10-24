@@ -17,7 +17,6 @@ def test_help(capsys: pytest.CaptureFixture[str]) -> None:
         ["search", "foo"],
         ["show", "sha256:00"],
         ["reindex"],
-        ["verify"],
         ["account", "rename", "a", "b"],
         ["secret", "keys"],
     ],

@@ -12,11 +12,10 @@ from hypothesis import strategies as st
 
 from geniza.mime.classify import PartClass
 from geniza.mime.recipes import Mode, Policy
-from geniza.mime.strip import reconstruct
-from geniza.store import attachments, segment
+from geniza.store import attachments, reader, segment
 from geniza.store.ingest import Catalog, Ingester, message_id
 from geniza.store.lock import StoreLock
-from geniza.store.parts import PartRecord, parse_parts, stubs
+from geniza.store.parts import PartRecord
 
 T0 = datetime(2026, 10, 23, 14, 2, 11, tzinfo=UTC)
 EXTRACT_ALL = Policy(min_size=1, decoration_min_size=1)
@@ -44,15 +43,7 @@ def ing(tmp_path: Path) -> Iterator[Ingester]:
 
 
 def rebuild(store: Path, name: str, offset: int) -> bytes:
-    """The original message of a record, from its header and files."""
-    header, stripped = segment.read(store / name, offset)
-    parts = parse_parts(header.parts, header.stripped_size)
-    contents = [
-        attachments.read(store, p.file, p.blob) for p in parts if p.recipe is not None
-    ]
-    data = reconstruct(stripped, stubs(parts), contents)
-    assert message_id(data) == header.id
-    return data
+    return reader.message(store, name, offset)
 
 
 def test_corpus_message_rebuilds(

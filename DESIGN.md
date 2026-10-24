@@ -954,6 +954,30 @@ omitted when there is only one store or `default_store` is set. `sync`
 without arguments syncs every account of every store; with account names,
 only those (and only their stores are locked).
 
+`export --mbox PATH` writes every message of the store, rebuilt and
+checked against its id, to a new mboxrd file (`-` for stdout; an existing
+file is not overwritten), in store order and each message once, with the
+same `From` line and escaping as segment bodies. A message that cannot be
+rebuilt is reported and left out, and the exit status is non-zero.
+
+`verify` reads every record in full, re-hashes every attachment file a
+record names and checks it against the record, rebuilds every message and
+compares its hash with its id, and reads every journal through. Each
+problem is reported (and the exit status is non-zero); damage to one
+record does not stop the others from being checked, though damage to a
+record's header hides the records after it in that segment. Attachment
+files that no record names (orphans of a crash before their message was
+committed) are listed but are not problems.
+
+`debug import-local PATH` (development only) ingests a Maildir tree or an
+mbox into a store to exercise ingest on real volume before any network
+code exists. It writes no journal events, so it is not a migration path.
+The received date is a Maildir file's modification time (offlineimap sets
+it from the server) or an mbox `From` line's date, and Maildir messages go
+in oldest first. Running it again stores nothing new, so a second run
+reporting every message as already stored, followed by a clean `verify`,
+shows that the store holds every source message byte for byte.
+
 `stats --parts` scans a mailbox (remote, or an existing Maildir/mbox) without
 storing anything and reports, per class, the number and size of parts, how
 many would be stubbed vs. copied, the file count and inline bytes at

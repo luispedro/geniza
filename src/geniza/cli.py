@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from geniza import __version__
+from geniza.config import ConfigError
 
 log = logging.getLogger("geniza")
 
@@ -52,6 +53,24 @@ def _cmd_stats(args: argparse.Namespace, out: Output) -> int:
     from geniza import stats
 
     return stats.run(args, out)
+
+
+def _cmd_export(args: argparse.Namespace, out: Output) -> int:
+    from geniza import export
+
+    return export.run(args, out)
+
+
+def _cmd_verify(args: argparse.Namespace, out: Output) -> int:
+    from geniza import verify
+
+    return verify.run(args, out)
+
+
+def _cmd_import_local(args: argparse.Namespace, out: Output) -> int:
+    from geniza import debug
+
+    return debug.import_local(args, out)
 
 
 def _setup_logging(verbosity: int) -> None:
@@ -131,11 +150,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", metavar="ID")
     p.add_argument("--raw", action="store_true")
 
-    p = add("export", "export messages")
-    p.add_argument("--mbox", type=Path, metavar="PATH", required=True)
+    p = add("export", "export messages", _cmd_export)
+    p.add_argument(
+        "--mbox",
+        type=Path,
+        metavar="PATH",
+        required=True,
+        help="mboxrd file to create ('-' for stdout)",
+    )
 
     add("reindex", "rebuild cache/ from store/")
-    add("verify", "re-hash messages and attachments")
+    add("verify", "re-hash messages and attachments", _cmd_verify)
 
     p = add("stats", "dry-run part classification on a Maildir or mbox", _cmd_stats)
     p.add_argument("--parts", action="store_true", required=True)
@@ -173,6 +198,16 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "encrypt":
             s.add_argument("--key", metavar="FINGERPRINT")
 
+    p = add("debug", "development-only commands")
+    dsub = p.add_subparsers(dest="debug_command", required=True)
+    d = dsub.add_parser(
+        "import-local",
+        help="ingest a Maildir or mbox into a store (testing only)",
+        parents=[common],
+    )
+    d.add_argument("path", type=Path, metavar="PATH", help="Maildir or mbox")
+    d.set_defaults(handler=_cmd_import_local, command_name="debug import-local")
+
     return parser
 
 
@@ -182,6 +217,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     handler: Handler = args.handler
     try:
         return handler(args, Output(as_json=args.json))
+    except ConfigError as e:
+        log.error("%s", e)
+        return 2
     except KeyboardInterrupt:
         log.error("interrupted")
         return 130

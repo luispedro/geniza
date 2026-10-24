@@ -52,6 +52,7 @@ src/geniza/
     classify.py         # body / crypto / decoration / attachment / other
     recipes.py          # base64 / identity / QP round-trip checks
     names.py            # filename decoding and sanitising
+    strip.py            # stub out bodies and splice them back
   store/
     segment.py          # record framing, writer, reader, tail recovery
     attachments.py      # content-addressed attachment files
@@ -59,6 +60,8 @@ src/geniza/
     journal.py          # append-only JSONL events and replay
     lock.py             # flock on store/.lock
     ingest.py           # strip → verify → commit
+    parts.py            # record header part entries
+    reader.py           # rebuild messages from records
   index/
     schema.py
     reindex.py
@@ -70,6 +73,9 @@ src/geniza/
     imap.py             # M9, after the first release
     matching.py         # stable ids and header-verified matching (M9)
   stats.py              # stats --parts
+  export.py             # export --mbox
+  verify.py             # verify
+  debug.py              # debug import-local (development only)
 tests/
   corpus/               # synthetic messages, one per tricky case
 ```
