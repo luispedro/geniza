@@ -627,8 +627,31 @@ sync batch. Each line is one event:
   [Message matching](#message-matching). Absent otherwise.
 - `flags` always carries the **full** flag/keyword set, never a diff, so
   replay is idempotent.
-- Current state = replay of all journal files, cached in the index.
+- Every event assigns a value without looking at what was there before:
+  `add`/`remove` set or clear the message at (`mbox`, `rid`); `flags` sets
+  the flags of (`msg`, `mbox`); `reset` voids every `rid` and flag set of
+  its mailbox; `promote`/`drop`/`purge` set a message's fate in
+  `incoming/` and `undrop` clears it. Replaying events that were already
+  applied (twice, or re-derived after a crash) changes nothing.
+- Flags belong to a message in a mailbox, so identical copies in one
+  mailbox share one set. They are not cleared when the message leaves the
+  mailbox (that would make the result depend on event order); readers
+  ignore flags of a message that is not there, and a sync writes a `flags`
+  event with every `add`.
+- An `eid` keeps pointing to its message after the message is removed.
+- `seq` starts at 1 and increases by one per event across all files of
+  the account. Events are written in batches; a batch shares one `ts` and
+  goes to the file of that UTC month. Lines are compact UTF-8 JSON with
+  keys in the order shown. An unknown `op` or field is an error, not
+  skipped (the format version is in `store.toml`).
+- Current state = replay of all journal files, cached in the index (with
+  the last `seq` applied, so only newer events are replayed).
   Replaying millions of lines takes seconds.
+- Only the end of the last journal file can be torn (lines that do not
+  parse up to the end of the file, an unterminated line, zeros). The
+  writer truncates it, with a warning, before its first batch, even if it
+  then writes to a new month's file; readers skip it with a warning.
+  Damage anywhere else is reported and the file is left alone.
 - The journal doubles as history: when a message was filed, read, deleted.
 
 `sync.json` holds only cursors and is rewritten atomically (temp + rename):
@@ -654,7 +677,8 @@ One writer per store, enforced with `flock(store/.lock)`.
 4. `sync.json`: temp + `fsync` + `rename`.
 
 A crash at any point leaves at worst orphaned attachments (picked up by
-`verify`/`compact`) or a torn record at the end of the open segment.
+`verify`/`compact`), a torn record at the end of the open segment, or a
+torn tail of the last journal file (see [the journal](#state-the-journal)).
 When the writer opens a segment, it removes a torn record at its end: the
 records' headers are walked (without decompressing bodies) and the last
 record is checked in full (complete, decompresses, checksum and
@@ -842,6 +866,12 @@ repeat. It is meant to be written early, to set the defaults from real mail.
 - These two are the only planned third-party dependencies.
 
 ## Open questions
+
+- `promote`, `drop`, `undrop` and `purge` concern `incoming/`, which is
+  per store, but journals are per account. Which journal gets them
+  (the account that downloaded the message, every account that has it,
+  or a store-level journal) is not decided yet; `journal.py` takes the
+  account as a parameter and does not care.
 
 - Defaults for `max_age` and the mass-drop guard are guesses. `stats
   --parts` cannot inform them: a Maildir has no server receive dates or
