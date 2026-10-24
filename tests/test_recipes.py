@@ -14,6 +14,7 @@ from geniza.mime.recipes import (
     decode,
     encode,
     encode_base64,
+    stub_bytes,
 )
 from geniza.mime.strip import Cut, reconstruct, strip
 from geniza.mime.tree import Kind, Part
@@ -139,13 +140,13 @@ def test_identity_binary_is_unchanged(body: bytes) -> None:
 
 
 @given(st.binary(max_size=500))
-def test_identity_text_is_stubbed_only_if_exact(body: bytes) -> None:
+def test_identity_text_always_round_trips(body: bytes) -> None:
     decoded = decode(body, leaf(body, "8bit", "text/x-python"))
-    if decoded.recipe is None:
-        assert decoded.content == body
-    else:
-        assert decoded.content is not None
-        assert encode(decoded.content, decoded.recipe) == body
+    assert decoded.recipe is not None and decoded.content is not None
+    assert encode(decoded.content, decoded.recipe) == body
+    assert stub_bytes("f", decoded.recipe).endswith(
+        b"\n" if body.endswith(b"\n") else b"]"
+    )
 
 
 def test_qp_is_never_stubbed() -> None:

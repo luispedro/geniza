@@ -439,7 +439,13 @@ Recipes:
 - `identity` (`7bit`, `8bit`, `binary`): the body is the content. For
   `text/*` parts with consistent CRLF line endings, the file is written
   with LF (`eol: "crlf"` records the conversion), so a `.py` or `.patch`
-  file is usable directly. Mixed line endings fail the round trip.
+  file is usable directly. A `text/*` part with mixed line endings is
+  stubbed without conversion (`eol` is then that of its last line): the
+  file is the body as is, which is what copy mode would write too, so
+  copy would only keep a second copy of the same bytes in the message.
+  Writing such a file with LF would need a record of which lines had
+  CRLF, a format change not worth making: no such part occurred among the
+  42k attachments in the measured mailbox.
 - `quoted-printable`: soft line breaks cannot be reproduced reliably, so QP
   parts are always copy mode. This covers many small text attachments; for
   `text/*` parts whose decoded content uses CRLF consistently, the file is

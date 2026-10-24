@@ -53,7 +53,8 @@ class IdentityRecipe:
     #: The encoded form uses CRLF and the content LF (text/* parts only).
     #: Otherwise the content is the body unchanged.
     crlf_to_lf: bool
-    #: Line endings of the encoded form, if it has any; used for the stub.
+    #: Line endings of the encoded form, if it has any (the last line's,
+    #: if they are mixed); used for the stub.
     eol: Eol
     final_eol: bool
 
@@ -187,12 +188,24 @@ def encode_identity(content: bytes, recipe: IdentityRecipe) -> bytes:
     return content.replace(b"\n", b"\r\n") if recipe.crlf_to_lf else content
 
 
+def _last_eol(body: bytes) -> tuple[Eol, bool]:
+    """For a stub: the line ending of a body with mixed ones, taken from its
+    last line, and whether it ends with one."""
+    if body.endswith(b"\r\n"):
+        return "crlf", True
+    if body.endswith(b"\n"):
+        return "lf", True
+    return ("crlf" if b"\r\n" in body else "lf"), False
+
+
 def _decode_identity(body: bytes, is_text: bool) -> Decoded:
     eol, final = _eol_style(body)
-    if not is_text:
-        return Decoded(body, IdentityRecipe(False, eol or "lf", final))
     if eol is None:
-        return Decoded(body, None, "mixed line endings")
+        # Mixed line endings: no LF conversion, the file is the body as is.
+        recipe = IdentityRecipe(False, *_last_eol(body))
+        return Decoded(body, recipe, "mixed line endings" if is_text else None)
+    if not is_text:
+        return Decoded(body, IdentityRecipe(False, eol, final))
     recipe = IdentityRecipe(eol == "crlf", eol, final)
     content = body.replace(b"\r\n", b"\n") if recipe.crlf_to_lf else body
     assert encode_identity(content, recipe) == body

@@ -78,7 +78,7 @@ EXPECTED: dict[str, list[tuple[str, str, str]]] = {
         ("1", B, INLINE),
         ("2", A, STUB),
         ("3", A, STUB),
-        ("4", A, COPY),  # mixed line endings
+        ("4", A, STUB),  # mixed line endings, stubbed as is
     ],
     "inline_image_no_name": [("1", B, INLINE), ("2", D, STUB)],
     "no_message_id": [("1", B, INLINE)],
@@ -165,7 +165,9 @@ def test_identity_text_written_with_lf() -> None:
     plans = {p.part.path: p for p in plan_message(data, EXTRACT_ALL)}
     assert plans["2"].content == b"# Notes\n\n- one\n- two\n"
     assert plans["3"].content == "Grüße aus Köln\n".encode()
-    # Copy mode keeps the content as it is.
+    # Mixed line endings: no conversion, the file is the body as is.
+    assert plans["4"].mode is Mode.STUB
+    assert plans["4"].reason == "mixed line endings"
     assert plans["4"].content == b"line one\r\nline two\nline three\r\n"
 
 

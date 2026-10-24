@@ -390,7 +390,7 @@ def qp_text_attachments() -> bytes:
 @case("identity_text_attachments")
 def identity_text_attachments() -> bytes:
     """7bit/8bit text attachments: consistent CRLF (stub, written with LF)
-    and mixed line endings (copy)."""
+    and mixed line endings (stub, written as is)."""
     notes = "# Notes\n\n- one\n- two\n"
     mixed = "line one\r\nline two\nline three\r\n"
     utf8 = "Gr\u00fc\u00dfe aus K\u00f6ln\n"
