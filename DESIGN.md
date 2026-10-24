@@ -472,7 +472,9 @@ is not planned.
 `attachments/YYYY/MM/<first 16 hex of blob hash>_<name>`
 
 - `YYYY/MM` is the month the blob was first written.
-- `<name>` is the decoded filename (RFC 2231/2047), NFC-normalised, with `/`,
+- `<name>` is the decoded filename (RFC 2231/2047), NFC-normalised, cut to
+  what follows its last `\` (Windows clients send full paths such as
+  `C:\Users\me\report.doc`), with `/`,
   NUL, control characters, bidirectional controls (U+202E can make
   `…fdp.exe` display as `…exe.pdf`), leading dots and surrounding
   whitespace removed, truncated to 120 bytes of UTF-8 (preserving an

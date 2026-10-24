@@ -45,12 +45,14 @@ def _truncate(name: str, limit: int) -> str:
 def sanitize(name: str) -> str:
     """Make a decoded filename safe as the last component of a path.
 
-    NFC-normalises, removes ``/``, NUL and other control characters
+    NFC-normalises, keeps only what follows the last ``\\`` (Windows
+    clients send full paths), removes ``/``, NUL and other control characters
     (including bidirectional controls), strips leading dots and surrounding
     whitespace, and truncates to 120 bytes of UTF-8, keeping the extension.
     May return an empty string.
     """
     name = unicodedata.normalize("NFC", _decode_encoded_words(name))
+    name = name.rpartition("\\")[2]
     name = "".join(
         ch
         for ch in name
