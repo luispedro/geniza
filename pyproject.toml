@@ -4,6 +4,8 @@ version = "0.0.1"
 description = "One-way mail archiver into a borg-friendly, searchable local store"
 authors = [{ name = "Luis Pedro Coelho", email = "luis@luispedro.org" }]
 requires-python = ">=3.15"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = ["cryptography"]
 
 [project.scripts]
