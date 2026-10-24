@@ -48,6 +48,12 @@ def _not_implemented(args: argparse.Namespace, out: Output) -> int:
     return 2
 
 
+def _cmd_stats(args: argparse.Namespace, out: Output) -> int:
+    from geniza import stats
+
+    return stats.run(args, out)
+
+
 def _setup_logging(verbosity: int) -> None:
     level = {-1: logging.ERROR, 0: logging.WARNING, 1: logging.INFO}.get(
         verbosity, logging.DEBUG if verbosity > 1 else logging.ERROR
@@ -131,13 +137,21 @@ def build_parser() -> argparse.ArgumentParser:
     add("reindex", "rebuild cache/ from store/")
     add("verify", "re-hash messages and attachments")
 
-    p = add("stats", "dry-run part classification on a Maildir or mbox")
+    p = add("stats", "dry-run part classification on a Maildir or mbox", _cmd_stats)
     p.add_argument("--parts", action="store_true", required=True)
     p.add_argument("path", type=Path, metavar="PATH", help="Maildir or mbox")
     p.add_argument(
         "--examples",
         action="store_true",
         help="also list identifying examples (paths, Message-IDs)",
+    )
+    p.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=0,
+        metavar="N",
+        help="worker processes (default: one per CPU)",
     )
 
     p = add("account", "manage accounts")
