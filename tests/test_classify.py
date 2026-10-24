@@ -31,6 +31,14 @@ EXPECTED: dict[str, list[tuple[str, str, str]]] = {
         ("4", A, STUB),
         ("5", A, STUB),
     ],
+    "base64_quirks": [
+        ("1", B, INLINE),
+        ("2", A, STUB),
+        ("3", A, STUB),
+        ("4", A, STUB),
+        ("5", A, COPY),  # a blank line after every line
+        ("6", D, INLINE),  # empty
+    ],
     "binary_8bit_attachment": [("1", B, INLINE), ("2", A, STUB)],
     "calendar_alternative": [
         ("1.1", B, INLINE),

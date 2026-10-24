@@ -12,6 +12,7 @@ case needs.
 import base64
 import quopri
 import random
+import string
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -528,6 +529,63 @@ def base64_layouts() -> bytes:
         + "Content-Transfer-Encoding: base64\n\n"
         + padded
         + "--blay--\n"
+    )
+
+
+def set_pad_bits(text: str, bits: int) -> str:
+    """Set the bits that padding discards, as some encoders leave them."""
+    i = len(text.rstrip().rstrip("=")) - 1
+    alphabet = string.ascii_uppercase + string.ascii_lowercase + string.digits + "+/"
+    return text[:i] + alphabet[alphabet.index(text[i]) | bits] + text[i + 1 :]
+
+
+@case("base64_quirks")
+def base64_quirks() -> bytes:
+    """More base64 seen from real clients. Stubbable: non-zero bits before
+    the padding (Evolution 2.x with "==", Entourage with "="), and 8 KiB
+    chunks cut into 2047-character lines with a blank line between chunks
+    (Coremail). Copy: a blank line after every line. Inline: an empty
+    image (PHPMailer)."""
+    evolution = set_pad_bits(b64(pdf(41, 3001), eol="\n"), 0b0110) + "\n\n"
+    entourage = "\n" + set_pad_bits(b64(jpeg(42, 3002), eol="\n"), 0b01)
+    text = base64.b64encode(blob(43, 40000)).decode("ascii")
+    chunks, i, size = [], 0, 8192
+    while i < len(text):
+        chunk = text[i : i + size]
+        chunks.append(
+            "\n".join(chunk[j : j + 2047] for j in range(0, len(chunk), 2047))
+        )
+        i, size = i + size, 8191
+    coremail = "\n\n".join(chunks) + "\n"
+    double = b64(pdf(44), eol="\n\n")
+    return crlf(
+        headers("base64 quirks", mid(41))
+        + 'Content-Type: multipart/mixed; boundary="bqrk"\n\n'
+        + "--bqrk\n"
+        + "Content-Type: text/plain\n\n"
+        + "Base64 from unusual encoders.\n"
+        + "--bqrk\n"
+        + 'Content-Type: application/pdf; name="evolution.pdf"\n'
+        + "Content-Transfer-Encoding: base64\n\n"
+        + evolution
+        + "--bqrk\n"
+        + 'Content-Type: image/jpeg; name="entourage.jpg"\n'
+        + "Content-Disposition: attachment\n"
+        + "Content-Transfer-Encoding: base64\n\n"
+        + entourage
+        + "\n--bqrk\n"
+        + 'Content-Type: application/octet-stream; name="coremail.bin"\n'
+        + "Content-Transfer-Encoding: base64\n\n"
+        + coremail
+        + "--bqrk\n"
+        + 'Content-Type: application/pdf; name="double-spaced.pdf"\n'
+        + "Content-Transfer-Encoding: base64\n\n"
+        + double
+        + "--bqrk\n"
+        + "Content-Type: image/gif\n"
+        + "Content-Disposition: inline\n"
+        + "Content-Transfer-Encoding: base64\n\n"
+        + "\n--bqrk--\n"
     )
 
 

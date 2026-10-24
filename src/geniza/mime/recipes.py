@@ -23,9 +23,12 @@ EOL_BYTES: dict[Eol, bytes] = {"crlf": b"\r\n", "lf": b"\n"}
 
 KiB = 1024
 
-#: A layout may have this many runs, plus one per LAYOUT_LINES_PER_RUN lines.
+#: A layout may have this many runs, plus one per LAYOUT_BYTES_PER_RUN bytes
+#: of base64 text.
 LAYOUT_BASE_RUNS = 8
-LAYOUT_LINES_PER_RUN = 16
+LAYOUT_BYTES_PER_RUN = 1 * KiB
+
+B64_ALPHABET = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
 
 type Layout = tuple[tuple[int, int], ...]
@@ -40,6 +43,9 @@ class Base64Recipe:
     #: Every line's length as (length, count) runs, when the lines are not
     #: all ``line`` long; blank lines are runs of length 0.
     layout: Layout = ()
+    #: The bits that padding discards from the last character before the
+    #: ``=``; canonical base64 has them zero, some encoders do not.
+    pad_bits: int = 0
 
 
 @dataclass(frozen=True)
@@ -107,6 +113,10 @@ def _eol_style(body: bytes) -> tuple[Eol | None, bool]:
 
 def encode_base64(content: bytes, recipe: Base64Recipe) -> bytes:
     encoded = base64.b64encode(content)
+    if recipe.pad_bits:
+        i = len(encoded.rstrip(b"=")) - 1
+        c = B64_ALPHABET[B64_ALPHABET.index(encoded[i]) | recipe.pad_bits]
+        encoded = encoded[:i] + bytes([c]) + encoded[i + 1 :]
     eol = EOL_BYTES[recipe.eol]
     if recipe.layout:
         lines, i = [], 0
@@ -120,21 +130,31 @@ def encode_base64(content: bytes, recipe: Base64Recipe) -> bytes:
     return eol.join(lines) + (eol if recipe.final_eol and lines else b"")
 
 
+def _pad_bits(text: bytes) -> int:
+    """The bits of the last character before the padding that it discards."""
+    pad = len(text) - len(text.rstrip(b"="))
+    if not pad:
+        return 0
+    return B64_ALPHABET.index(text[-pad - 1]) & (0b1111 if pad == 2 else 0b11)
+
+
 def _base64_recipe(lines: list[bytes], eol: Eol, final: bool) -> Base64Recipe | None:
     """The recipe for base64 text cut into ``lines``: a fixed line length if
     every line but a shorter last one has it, else an explicit layout if it
     is small enough to be worth storing."""
+    text = b"".join(lines)
+    pad_bits = _pad_bits(text)
     if not lines or not lines[0]:
         line = 0
     else:
         line = len(lines[0])
         if all(len(x) == line for x in lines[:-1]) and 0 < len(lines[-1]) <= line:
-            return Base64Recipe(line, eol, final)
+            return Base64Recipe(line, eol, final, pad_bits=pad_bits)
     layout = tuple((k, len(list(g))) for k, g in groupby(len(x) for x in lines))
-    if len(layout) > LAYOUT_BASE_RUNS + len(lines) // LAYOUT_LINES_PER_RUN:
+    if len(layout) > LAYOUT_BASE_RUNS + len(text) // LAYOUT_BYTES_PER_RUN:
         return None
     line = Counter(len(x) for x in lines if x).most_common(1)[0][0]
-    return Base64Recipe(line, eol, final, layout)
+    return Base64Recipe(line, eol, final, layout, pad_bits)
 
 
 def _decode_base64(body: bytes) -> Decoded:
@@ -148,9 +168,13 @@ def _decode_base64(body: bytes) -> Decoded:
         except binascii.Error:
             pass
         else:
-            recipe = _base64_recipe(lines, eol, final) if content else None
+            if not content:
+                return Decoded(content, None, "empty")
+            recipe = _base64_recipe(lines, eol, final)
             if recipe is not None and encode_base64(content, recipe) == body:
                 reason = "base64 line layout" if recipe.layout else None
+                if recipe.pad_bits:
+                    reason = "base64 padding bits"
                 return Decoded(content, recipe, reason)
             return Decoded(content, None, "base64 does not round-trip")
     try:

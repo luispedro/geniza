@@ -1,4 +1,5 @@
 import base64
+from dataclasses import replace
 from email.message import EmailMessage
 from itertools import groupby
 
@@ -7,7 +8,7 @@ from hypothesis import strategies as st
 
 from geniza.mime.recipes import (
     LAYOUT_BASE_RUNS,
-    LAYOUT_LINES_PER_RUN,
+    LAYOUT_BYTES_PER_RUN,
     Base64Recipe,
     IdentityRecipe,
     decode,
@@ -66,11 +67,37 @@ def test_base64_layout_round_trip(content: bytes, data: st.DataObject) -> None:
     decoded = decode(body, leaf(body, "base64"))
     assert decoded.content == content
     if decoded.recipe is None:
-        # A trailing blank line may be read as the final EOL instead.
         runs = len(list(groupby(len(x) for x in lines)))
-        assert runs > LAYOUT_BASE_RUNS + (len(lines) - 1) // LAYOUT_LINES_PER_RUN
+        assert runs > LAYOUT_BASE_RUNS + len(b"".join(lines)) // LAYOUT_BYTES_PER_RUN
     else:
         assert encode(content, decoded.recipe) == body
+
+
+@given(
+    st.binary(min_size=1, max_size=3000).filter(lambda b: len(b) % 3),
+    base64_recipes,
+    st.data(),
+)
+def test_base64_pad_bits_round_trip(
+    content: bytes, recipe: Base64Recipe, data: st.DataObject
+) -> None:
+    """Non-zero bits before the padding, as some encoders leave them, are
+    reproduced exactly."""
+    bits = data.draw(st.integers(1, 0b1111 if len(content) % 3 == 1 else 0b11))
+    body = encode_base64(content, replace(recipe, pad_bits=bits))
+    assert body != encode_base64(content, recipe)
+    decoded = decode(body, leaf(body, "base64"))
+    assert decoded.content == content
+    assert isinstance(decoded.recipe, Base64Recipe)
+    assert decoded.recipe.pad_bits == bits
+    assert encode(content, decoded.recipe) == body
+
+
+def test_empty_base64() -> None:
+    decoded = decode(b"", leaf(b"", "base64"))
+    assert decoded.content == b""
+    assert decoded.recipe is None
+    assert decoded.reason == "empty"
 
 
 @given(st.binary(min_size=1, max_size=3000), base64_recipes, st.data())
