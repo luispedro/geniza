@@ -1,0 +1,43 @@
+Received: from mx.example.org (mx.example.org [192.0.2.10])
+	by mail.example.net with ESMTPS id 4Xa9bC1d2Ez;
+	Thu, 22 Oct 2026 10:15:00 +0000
+From: Alice Example <alice@example.org>
+To: Bob Example <bob@example.net>
+Subject: Notes
+Date: Thu, 22 Oct 2026 10:15:00 +0000
+Message-ID: <corpus-0010@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="idid"
+
+--idid
+Content-Type: text/plain; charset=utf-8
+
+Three files.
+
+--idid
+Content-Type: text/markdown; charset=us-ascii; name="notes.md"
+Content-Disposition: attachment; filename="notes.md"
+Content-Transfer-Encoding: 7bit
+
+# Notes
+
+- one
+- two
+
+--idid
+Content-Type: text/plain; charset=utf-8; name="greeting.txt"
+Content-Disposition: attachment; filename="greeting.txt"
+Content-Transfer-Encoding: 8bit
+
+Grüße aus Köln
+
+--idid
+Content-Type: text/plain; charset=us-ascii; name="mixed.txt"
+Content-Disposition: attachment; filename="mixed.txt"
+Content-Transfer-Encoding: 7bit
+
+line one
+line two
+line three
+
+--idid--

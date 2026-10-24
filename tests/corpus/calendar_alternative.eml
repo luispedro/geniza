@@ -1,0 +1,46 @@
+Received: from mx.example.org (mx.example.org [192.0.2.10])
+	by mail.example.net with ESMTPS id 4Xa9bC1d2Ez;
+	Thu, 22 Oct 2026 10:15:00 +0000
+From: Alice Example <alice@example.org>
+To: Bob Example <bob@example.net>
+Subject: Invitation: Meeting
+Date: Thu, 22 Oct 2026 10:15:00 +0000
+Message-ID: <corpus-0018@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="cal-mixed"
+
+--cal-mixed
+Content-Type: multipart/alternative; boundary="cal-alt"
+
+--cal-alt
+Content-Type: text/plain; charset=utf-8
+
+You are invited.
+--cal-alt
+Content-Type: text/html; charset=utf-8
+
+<p>You are invited.</p>
+--cal-alt
+Content-Type: text/calendar; charset=utf-8; method=REQUEST
+Content-Transfer-Encoding: 7bit
+
+BEGIN:VCALENDAR
+VERSION:2.0
+METHOD:REQUEST
+BEGIN:VEVENT
+UID:corpus-event-1@example.org
+DTSTART:20261101T100000Z
+SUMMARY:Meeting
+END:VEVENT
+END:VCALENDAR
+--cal-alt--
+
+--cal-mixed
+Content-Type: application/ics; name="invite.ics"
+Content-Disposition: attachment; filename="invite.ics"
+Content-Transfer-Encoding: base64
+
+QkVHSU46VkNBTEVOREFSDQpWRVJTSU9OOjIuMA0KTUVUSE9EOlJFUVVFU1QNCkJFR0lOOlZFVkVO
+VA0KVUlEOmNvcnB1cy1ldmVudC0xQGV4YW1wbGUub3JnDQpEVFNUQVJUOjIwMjYxMTAxVDEwMDAw
+MFoNClNVTU1BUlk6TWVldGluZw0KRU5EOlZFVkVOVA0KRU5EOlZDQUxFTkRBUg0K
+--cal-mixed--

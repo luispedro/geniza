@@ -1,0 +1,36 @@
+Received: from mx.example.org (mx.example.org [192.0.2.10])
+	by mail.example.net with ESMTPS id 4Xa9bC1d2Ez;
+	Thu, 22 Oct 2026 10:15:00 +0000
+From: MAILER-DAEMON@example.net (Mail Delivery System)
+To: Bob Example <bob@example.net>
+Subject: Undelivered Mail Returned to Sender
+Date: Thu, 22 Oct 2026 10:15:00 +0000
+Message-ID: <corpus-0020@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/report; report-type=delivery-status;
+	boundary="DSN.0001"
+
+--DSN.0001
+Content-Description: Notification
+Content-Type: text/plain; charset=us-ascii
+
+Your message could not be delivered.
+
+--DSN.0001
+Content-Description: Delivery report
+Content-Type: message/delivery-status
+
+Reporting-MTA: dns; mail.example.net
+
+Final-Recipient: rfc822; nobody@example.net
+Action: failed
+Status: 5.1.1
+
+--DSN.0001
+Content-Description: Undelivered Message Headers
+Content-Type: text/rfc822-headers
+
+From: Alice <alice@example.org>
+Subject: Hello
+
+--DSN.0001--

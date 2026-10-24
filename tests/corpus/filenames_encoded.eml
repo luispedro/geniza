@@ -1,0 +1,63 @@
+Received: from mx.example.org (mx.example.org [192.0.2.10])
+	by mail.example.net with ESMTPS id 4Xa9bC1d2Ez;
+	Thu, 22 Oct 2026 10:15:00 +0000
+From: Alice Example <alice@example.org>
+To: Bob Example <bob@example.net>
+Subject: Encoded names
+Date: Thu, 22 Oct 2026 10:15:00 +0000
+Message-ID: <corpus-0015@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="fnames"
+
+--fnames
+Content-Type: text/plain
+
+Names.
+--fnames
+Content-Type: application/pdf
+Content-Disposition: attachment; filename*=UTF-8''%C3%A9t%C3%A9.pdf
+Content-Transfer-Encoding: base64
+
+Gwjl0rS7jFNmbSzlLHghZuQkGDCR7zk6lLPJTfZE7M+FxHF6plczJWkXtCl41oprjuh9FzcKTtfx
+An6+ticISyATPlUCsABIgbWJvbuZ++arwyzuwIFj1F0iaXGMO+nvcQEDwEROWWXleB0NfVUG60Uj
+UtO+AKjN+/GoIz5lNtAPI7zUweKhIgWqiX3Z+v5fqBnA8qe2mRYuqBGuHXvwTPvGJ3vG/AtYuJ7H
+ILHcTQO6xGcOsBkyG9OQBM3qfAkk0MGIkUmCtv8=
+--fnames
+Content-Type: application/octet-stream
+Content-Disposition: attachment;
+ filename*0*=UTF-8''a%20very%20long%20name%20split;
+ filename*1*=%20over%20two%20lines.txt
+Content-Transfer-Encoding: base64
+
+NQTitOC03GhRO5LYtvIj34ywZvNfK0m2ZnD+oeJCULlVVmE0inEiWizCK/kltEBIY2IC67u1l15O
+EfGSVha5HUgpG3aX80t9EB2Gkpy05xLjUi11t0FoGx/hgc5sKQVn/FMHuo5Jv0lGOASrCAbxLlet
+cZTKQtRdqz7+jletzB4uMh8igPplJ5fB+E2+AVrelvwMLX2y2brg0V7eSibmLGyi6y3psJNW7jA1
+awi31A87p6tWtYQYhZFjsnEZoUQa0+uQSbNyn8o=
+--fnames
+Content-Type: application/pdf;
+ name="=?UTF-8?B?0J7RgtGH0LXRgi5wZGY=?="
+Content-Transfer-Encoding: base64
+
+53xH+oxynMFjGTZk5/mooKolbCUNCcRhqCC7+DfdPjNcjmLMsQQgFmKJ6p+UY20EVPBE5z94kB8N
+S1Gg2tCEHTVboAYwo3dY5UaFwsfOt33PcE6aV7LsLW3QutxiECV1Aiv7PvW70+cXaxH6eGdUPFn7
+GbnHKEsSgCJpS/Nyh62CsMyLNugmnFB0UgjtLq+ba5yoTdeawJgm04vAhfX8w3taxVLV+Zt1irdl
+Uz2z+UMUon7vhIMBN1RCBeqXbAqDYLgergyUkOE=
+--fnames
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="=?ISO-8859-1?Q?r=E9sum=E9.pdf?="
+Content-Transfer-Encoding: base64
+
+ClhN/ksjkn1E7F4TY5CRCc8KkEIlZx60mx//2b9OBmrfikrliMgvlZxw75AlS3zK0rn4mFxEY45S
+nezWDGosUQdZwPlus5ts6d/d4kjXwj6kkenP9vpU9Jpa3YIFrHqDg0HmUGzDZfNLnZGoF2TjmG/d
+b+a7U9U0+cxvxSajmD+nwvjVhuCP4yVCos3TJmA5W/7Ta8x2gdqbSMao5WclmoPUTpG9RugSNEvJ
+p7feMtZZRjlAXdtdymqHVzdwuufXpinvWGntJbY=
+--fnames
+Content-Type: text/plain
+Content-Disposition: attachment; filename*=UTF-8''cafe%CC%81.txt
+Content-Transfer-Encoding: base64
+
+WSIBNG0EidK9+RLscXxHymgGImCTlIV89Au41BuYMDWo65dxUgcwgnu+WQHth7LiGIeec3W0fkJh
+H3/JenKfZXwhHm3/dMbwnP22plkXy6PJ3C2V+KjtsAATYAxb4iy1tqCQw3WWM8O1V1xyapYihsgC
+b860Ql/hbuTMDyn7mML0wyxjXq36vQcdYIpXZ9loHf3StoR5RHOxlvp3TYvV54T5tphDbKISbOBW
+Q5IuitoY5ZdLR6JfKsB4ycFPpmQIImtEWvY1Raw=
+--fnames--

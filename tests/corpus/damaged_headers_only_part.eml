@@ -1,0 +1,21 @@
+Received: from mx.example.org (mx.example.org [192.0.2.10])
+	by mail.example.net with ESMTPS id 4Xa9bC1d2Ez;
+	Thu, 22 Oct 2026 10:15:00 +0000
+From: Alice Example <alice@example.org>
+To: Bob Example <bob@example.net>
+Subject: Headers without bodies
+Date: Thu, 22 Oct 2026 10:15:00 +0000
+Message-ID: <corpus-0033@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="ho"
+
+--ho
+Content-Type: text/plain
+--ho
+
+A part with no headers.
+--ho
+Content-Type: application/octet-stream; name=empty.bin
+Content-Transfer-Encoding: base64
+
+--ho--

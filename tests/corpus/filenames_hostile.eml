@@ -1,0 +1,88 @@
+Received: from mx.example.org (mx.example.org [192.0.2.10])
+	by mail.example.net with ESMTPS id 4Xa9bC1d2Ez;
+	Thu, 22 Oct 2026 10:15:00 +0000
+From: Alice Example <alice@example.org>
+To: Bob Example <bob@example.net>
+Subject: Hostile names
+Date: Thu, 22 Oct 2026 10:15:00 +0000
+Message-ID: <corpus-0016@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="fnames"
+
+--fnames
+Content-Type: text/plain
+
+Names.
+--fnames
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="../../../etc/passwd"
+Content-Transfer-Encoding: base64
+
+9JVeH9qAGIFiytpX8f9DZp2DpSyX01/rj6x6lpja+VmpaAi2Jcvp43rQ+YVPxiR+PVj3iUbnT+hX
+z8HRkhJ2NnAqw70cG+ltMEgdeJsEswNgv9RHPaln0jksGB5YhKRUjGAiDHTRhzp+hGEMLk3Ibmiw
+Z2ulFIrtcnEAgjBGeF51RE90K/QCSq4XO9Vm/CRINH9gzoX2P/orphH0XyIDThMAavBlLE2/E0gb
+rq0OeTNt/1gFfX2BvycBpp60W9m14emF7QB+dkg=
+--fnames
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="=?UTF-8?Q?bell=07esc=1B.txt?="
+Content-Transfer-Encoding: base64
+
+TWqphCATRDTAoOKMOrEDKwCAxDoS17HtGsND5imowPKrbwmjcpwUl+7O3HrHF8QImaAkwZvRuOys
+n3Szmd7uu9DFleIjCCZ7TmbPfGwAqLrH85QMH/bkdddg+rXxoAQPI9d6ehwC+dV/IimfPoMl9rfY
+HhPR+SWZI3VWea1vJbaIk0TKaHUbAWi9POQRhwYD2Veu1EdRK8m6LtjHsoi8QkUItIaxw5RGqn51
+/MGiK+iYRQ3qJwcOpSYPmOebJAatU8f0ZiIHLHg=
+--fnames
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="=?UTF-8?Q?nul=00byte.txt?="
+Content-Transfer-Encoding: base64
+
+aY6/DYtarLCMRifnNduuoHkpYjRbAA6Ad63VM98uu2lOaN5/qXEWxUQQbJwXQ9j5Jz7W/WOrZ/UK
+23xLslk1c0gFq3UIZasGU6PuLkt/FB4UNfNrzC9QySj+alHIxZ2kydG76Eiblo+PKBwQNBUPdaFd
+iJOKlmMEaHxlpoayRtHeiwzFxMU/1YCRaUa4rxcS5xSHJd48x2nCZ+91jDkRy31cNP5SaukKBfIa
+306/UwCTJCLq4TveN9i5h/Q2U0+nfDYfvLf6iyw=
+--fnames
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="...hidden"
+Content-Transfer-Encoding: base64
+
+wouaimD9Cp/izgR14p1l6BvzlZUfIEMsEqkiftfMJt0g4avlSh0jystu50g6b343ekI4WibimzQE
+RAJdvB+61HFrMiP0kyIkJ5ZkLSVbEZwy2NEO+D3HscdvjhG5JftWqYQbJuOIlw/+uXT2xewm7x0h
+y7sVq7Tic0Y8yQZe3rZwaN0S2AUQd9EyU4qQPaQR93xlnKPcCYVfcw5J/wGEcXzYWChmc1Rdy56z
+hgXQ86FHgYmoWxsnykRv8SScS0yxAlqYEI4d6FI=
+--fnames
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.pdf"
+Content-Transfer-Encoding: base64
+
+LN5nGLG3xr2vuRBNw8CH/gF6k/Ed82JBR6WGdnE7TH1HiuSa+PBmYp8b9h7O+fQV+4w4ajPr4mWm
+9AIBb0b608AdGd19MwqWFLNdMBG/hyd6x1/YmNtxTmiT/1CSdEmkFj5CHPhmLNTI00tzQWUpmlzC
+x/EeeS0Td3WXtWlxWv3jjjHYCsLMjdZoAh3nAlO1ufaNFnsXy7H+i+ldJzoLxOO2vMWIBe8P8+pL
+SLM9KLPAN0cIuy4DsxJ6iVZs9S0fhcrh5L0g6NA=
+--fnames
+Content-Type: application/pdf
+Content-Disposition: attachment; filename=".."
+Content-Transfer-Encoding: base64
+
+0aROBLvj0A+sRDr214m+t5vdPeSg/BZuzOL+ElUpYn4agOY7P/OP8NzKAy2K/OFt6cKr5Mkk4OGp
+hE6slKzS5Vqnv1D7B8KU5Z3meyBllc1S+3zJ48rnDuAizDIgXCERzz2orGbuvWpKqknMNa26r89Q
+fCAVYiWbvb780Ue1d/gZXBb3YtZdaJWRMw2KUDapYo8Kbv4F5PV7kpSGr4qYYIvuy6EcsWk+GhFT
+Gn8UanoIJVqp8X7ktRj3YuKdcmx8Gkkim2T7hW0=
+--fnames
+Content-Type: image/png
+Content-Disposition: attachment; filename=""
+Content-Transfer-Encoding: base64
+
+QjnALfXB5aHTX26aW/40aG7Dkm0a6x4DojyxUw6ZnNgsVPkIUMLBfPiYXL6ke2GRtSwi8QxlTV6+
+fjZKxkZcrULGCc3kGQUzcHNo7x0kvytPC0G89I+jAmXmy398EK3LdRybGOn3XzBmMSnQN0qduFYJ
+62KgdMIfEXRrAGsOEfFYX90p+rIFRG7vK5WwTHupvHOnN6xTBnw8Szaaa5vtgjL36yjR2apRHeuK
+c7oAOdPVRFRG0IYINX1VfIUJlq4oTQ1sPFVat8Q=
+--fnames
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="C:\\Users\\me\\win.doc"
+Content-Transfer-Encoding: base64
+
+9oeUOl+uGdKWt38W3MILVEnhsGxmVMVShpmA99mpI92C4cnER8OgveO86bhlckEVZKwK0Jf4Ob7R
+wuOEWJiOAEToMu3fjlNuLJDonIv7TcEJImx+swd3ziZjq+eWM+c+d/WjDtMu2uEDN0u1lLcHHQR+
+qBeM+x8myG12TXhWfOv4R5fJDPkOafMuFg4LLmrzBS1vhR8Mtq4oUiJJLQlFKiyX2RMOU2vZfe8M
+5nKnDhIApc4AP7PRESlnCIDNnGu7iwCq9J5fVmo=
+--fnames--

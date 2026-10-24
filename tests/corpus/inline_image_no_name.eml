@@ -1,0 +1,43 @@
+Received: from mx.example.org (mx.example.org [192.0.2.10])
+	by mail.example.net with ESMTPS id 4Xa9bC1d2Ez;
+	Thu, 22 Oct 2026 10:15:00 +0000
+From: Alice Example <alice@example.org>
+To: Bob Example <bob@example.net>
+Subject: Screenshot
+Date: Thu, 22 Oct 2026 10:15:00 +0000
+Message-ID: <corpus-0005@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="sep"
+
+--sep
+Content-Type: text/plain
+
+See below.
+--sep
+Content-Type: image/png
+Content-Disposition: inline
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUkV8dp852GRBmcDlvbz7yFs3zpHL3h/BsOprRPEwQ23XKf5pvZ6M66ag
+fR3sJbGwh+/ibAf/DSHX2wszd3c4pcZ003/xNurBP1UyI6Y4QUYNO2qh5o1oJyj2EPscf9ktX6Lo
+FHgAcVLeqGUfP85ZeWFo6TOLh/4aGkXP7ZJZI9Q/mXNbAyDbLruimns3bJZ8aB0ojEexgpwuIZyV
+6p3MEd5FlQbE8SmyY17S2yh2iw3DV9MRzEgeahLqQoYjHGkwnkteEZ5+wOBxZlxvIHiJ2iEwUXQA
+uRjr+KphFN+yM1wB++6eNas8CsYZxik3v+PK9Tfzf/tZkXUqgB1W3wy6nipd5w9KunRLUPJrI/Yo
+aeoylowKio5USeBETIatodovoCtubDRt1oEul83j8DRW8/cX6c2wO6pmMibCcPeWjhD3MkHM5Ffv
+GmLwbX1MHKCFBYrxdlyRUzdqgBh8KpMbkO9kuEwl/C2JQwD/rBBpavRUs94lTYQlQdGvamWaj1oN
+lk233QCWE5KYShmNratDKrW5aIBW5tjmECdnWU9rTvhammaK0SY6Wk7FHRJ7kZFIsj/R11CGTE0v
+3yAxe/VF+HhSMmW0tDQWLfOclw7+IZVB6B+g+f8TY/BnhNoF7hwA8wGR8r+yj45bOh1K2DnRf2fo
+EqAE75WPjKY3qckJQzhrCUS+Xdx7WWBNzxmUJB5b1xX2UgLQKOxz9072CzylL7VOvVAuJ6irn3Or
+hvROMlP0gT5PMpYheB4T8XfBP4v/Phbk/e3ETcrRxsgp8TcXU3YYaClYWvAygzK601rItojk0NtS
+hgqWOkBd643GdFJ9dlRaqRt7u/qWwAOXvxvG7scxDBfMszAHXlftFNwBu71L6a9gCV2P127r9R/y
+kpZ0+l6QVxf0Kl81msU6V2kbTIOeMV+cHAbVXA3DB+soJvAlcJYHVwO6kkYEN5js+Qjes06Pjots
+HpIXQr/8T/h0m6/MzRlRNjphTvwuby2BbXzMHqsEFNZXdqBLNxwmVk6cuOC+bbD8hC5PDn0p/6Ho
+2Xuj/lkp0lxauD3qbQy1rbkUAFCY/IslxJl/eJWIFX9x7AdH6GfMxyUIeRfCPMI9lb3/xg2Y0G4F
+WFAaiNMNsA1AxnemdJm8paYUSfhrnPFHJTzUQg6sD6P6SoWD6u85aaP4amAIWOE5zTA5Wn7bKo1V
+Pk2j1ojgATWiJ20hIII2+xFcTruPbGWQvv8l8zqs/SEJ2WGhXsOA5WL+uskeRPBpwiRMGxfYNytA
+Aj9v2MV8X2/xNCZSlwsPGntA2Ndxr2s93HhLWtclJM71AXQ8aQjsCR/S/wyq0p49Oy3aXZVWK9uh
+2/lwh66FTTIbdPwqy/X2/Pd8YsFXsFfXwLpf71RRrIaiekExJ0ZGdYBKlzdXeDu+Xmf3U+Dm+XCB
+JVHB0BzyHoNgSDJy0vb5Bv294yCIbn629Vrp7C2lxoCgtbPo75iY0388EijeQYumVjpdHC6stdEW
+ZKvqffIdtkUow+KDLmUyyOpQUIzFDw3eLhu5gFjgf1zT5ScQjcY4yTcRj8uiuF/GsBMPW7cX0bEj
+X2WW
+--sep--

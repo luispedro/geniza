@@ -1,0 +1,17 @@
+Received: from mx.example.org (mx.example.org [192.0.2.10])
+	by mail.example.net with ESMTPS id 4Xa9bC1d2Ez;
+	Thu, 22 Oct 2026 10:15:00 +0000
+From: Alice Example <alice@example.org>
+To: Bob Example <bob@example.net>
+Subject: Plain text, LF
+Date: Thu, 22 Oct 2026 10:15:00 +0000
+Message-ID: <corpus-0002@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hi Bob,
+
+This is a plain message.
+From the corpus: a line starting with From, to exercise mbox escaping.
+
+Alice

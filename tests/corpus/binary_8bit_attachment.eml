@@ -1,0 +1,22 @@
+Received: from mx.example.org (mx.example.org [192.0.2.10])
+	by mail.example.net with ESMTPS id 4Xa9bC1d2Ez;
+	Thu, 22 Oct 2026 10:15:00 +0000
+From: Alice Example <alice@example.org>
+To: Bob Example <bob@example.net>
+Subject: 8bit attachment
+Date: Thu, 22 Oct 2026 10:15:00 +0000
+Message-ID: <corpus-0021@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="8b"
+
+--8b
+Content-Type: text/plain
+
+Data.
+--8b
+Content-Type: application/octet-stream; name="table.tsv"
+Content-Transfer-Encoding: 8bit
+
+tab	separated
+values é
+--8b--

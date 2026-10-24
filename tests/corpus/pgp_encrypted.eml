@@ -1,0 +1,49 @@
+Received: from mx.example.org (mx.example.org [192.0.2.10])
+	by mail.example.net with ESMTPS id 4Xa9bC1d2Ez;
+	Thu, 22 Oct 2026 10:15:00 +0000
+From: Alice Example <alice@example.org>
+To: Bob Example <bob@example.net>
+Subject: Encrypted
+Date: Thu, 22 Oct 2026 10:15:00 +0000
+Message-ID: <corpus-0008@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/encrypted; protocol="application/pgp-encrypted";
+	boundary="==ENC=="
+
+This is an OpenPGP/MIME encrypted message (RFC 4880 and 3156)
+--==ENC==
+Content-Type: application/pgp-encrypted
+Content-Description: PGP/MIME version identification
+
+Version: 1
+
+--==ENC==
+Content-Type: application/octet-stream; name="encrypted.asc"
+Content-Description: OpenPGP encrypted message
+Content-Disposition: inline; filename="encrypted.asc"
+
+-----BEGIN PGP MESSAGE-----
+
+M2UJOuVP016n91j2bDYYYNE4VyCmF3Ax2uFutLAQNQuhs84V0iQII9RKWD8QAK/P
+XOPG/7PVoIFIFZs1KfKUZmx9UaRxVMEHSsqJdelhxny0fAB0qF32Y4Ivt36tULiS
+QAo2MTgGuOXBCp3UkEgWZ9TF7RbQei98FGrzO6hqT8JwJh4FIld/s0LfSkS6XyqF
+r6hcaMQ7bXmAr+3meapB6TEWC2FLQ9u5T3gdHerjt6lWqiNCk/PfGI2n2f0ajHHQ
+cJQmENMX6WLBU8Oeozlc1AWEkGBDH5QbowQtqeyk3A5X6aNWZ+UCPAYT+bDEsQcW
+HnBhf06yROepI1SmDLxNhGmCwOYGATo1PJTflAHT8s6OJ2MkMsZRmwbIehBu0SqK
+Sm0w8oVLlwn/RBl9q3Wqs3xqoDES8vAl/fUv8mtxPdz21jaUxKnNdFrom7qBCJmV
+4pKG4Ul+9HHykSBJH4esjjZ6UFuc3+PaPp/J4I8yFm0ZxY0iKVWGKFbbqMNqk++Z
+92T9GIiRJIgeuK+wFFJUUF3Nv7PqWWZbsC4z8/wN16S7J+/XYDKgfgNV7YA1h72f
+2hGZMmfyDE+Y4HAmb7cRW/I0WoepdMtIv6aBgoDVNKikokgSGRbhzoV3OecxIlLb
+fxjmgYifvungDYizMeuAiwr5TjiJph1Y1FRvPs1obOhd8AwDyG6zS0wB3ldPPkQ4
++cZPRGeFnQh/EGRs0so4QdE5fmDR3mBMI7+V1ajSlLR9OjfkEz67ar4/3SwKCU6o
+3I1xZX9cwx1m4YoqZzG77i2axamhziPaDXqP+Unojwa7tKkz5WAb+VewN8QdByIp
+v7vPTBbW0R3kOmIDEQviy2gLqcOMWWVhhT+BV+0XHtYWaY8rGTqykb71g29Yxbbn
+APRRO1QFmCO/YPxoayBikKaNMHKxTjtoN4f/at8FhBT+gaiWkenpEXcl60kSF4O3
++z1ZGOVktggtVNMVAVHIqSAeRRsV26fD5p5chTUW/IZ8szNcTgZWJ1Fqxc5f+Lvv
+NqdCgcw//XxaHEu1wUIGJkX45foQy7ya1g4fENrbjjCsUlYEQiGh6T6l8CNPMD5X
+bLfmYuBFgKhqG9ySqmbpHvqGZr6xMqZMWED4WVasT1OewQf3JRG1XRuwwADrMVal
+3gXv1Wy/v38z7sc1Bs6HDz++C+CExASe5qV6CHEQBuIB6RT3
+=WxYz
+-----END PGP MESSAGE-----
+
+--==ENC==--

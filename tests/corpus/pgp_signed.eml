@@ -1,0 +1,114 @@
+Received: from mx.example.org (mx.example.org [192.0.2.10])
+	by mail.example.net with ESMTPS id 4Xa9bC1d2Ez;
+	Thu, 22 Oct 2026 10:15:00 +0000
+From: Alice Example <alice@example.org>
+To: Bob Example <bob@example.net>
+Subject: [PATCH] greet the world
+Date: Thu, 22 Oct 2026 10:15:00 +0000
+Message-ID: <corpus-0006@example.org>
+MIME-Version: 1.0
+Content-Type: multipart/signed; micalg=pgp-sha256;
+	protocol="application/pgp-signature";
+	boundary="==SIGNED=="
+
+This is an OpenPGP/MIME signed message (RFC 4880 and 3156)
+--==SIGNED==
+Content-Type: multipart/mixed; boundary="==MIXED=="
+
+--==MIXED==
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 7bit
+
+Patch attached, and the design notes.
+
+--==MIXED==
+Content-Type: text/x-patch; charset=UTF-8; name="0001-greet.patch"
+Content-Disposition: attachment; filename="0001-greet.patch"
+Content-Transfer-Encoding: 7bit
+
+diff --git a/hello.py b/hello.py
+--- a/hello.py
++++ b/hello.py
+@@ -1 +1 @@
+-print("hello")
++print("hello, world")
+
+--==MIXED==
+Content-Type: application/pdf; name="notes.pdf"
+Content-Disposition: attachment; filename="notes.pdf"
+Content-Transfer-Encoding: base64
+
+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
+
+--==MIXED==--
+
+--==SIGNED==
+Content-Type: application/pgp-signature; name="signature.asc"
+Content-Description: OpenPGP digital signature
+Content-Disposition: attachment; filename="signature.asc"
+
+-----BEGIN PGP SIGNATURE-----
+
+f2zMTvlEjkgsDPWT8IJ1JyuL/0Pnaco6kkbSztIcx3svjJt3upmg4pcEIFXB5az5
+H5SR5Vpbigobg9vK706V67qkD9xhw5kX3sRyqn9ujttrS3ov2mZvJxpb0mMhfeML
+Ij5LPf/9jKP5fArLcjRF5sjjWQLCkpdpMVVhyhwY6bk227EqWKdwIVVSX07gid+f
+yxLxoOZYjsuFM8esi3wjJgJrLINudrCYeh5kjkCA6c8XQcGWlrNeDCukrZmaiS2Q
+Zpy5G06fDvxTakdNr4NJJoxsPwWpEUL0ePMZkW16Djiui2RLm3GByMT0/T0+wP+L
+K81CRliO4xDNX/bw+Vz0OI7u0yDAgwO13e/l5loUmkGFYzbnBoYE1cchLDQd2lK7
+95dt1G/IPd7PUh0y
+=AbCd
+-----END PGP SIGNATURE-----
+
+--==SIGNED==--
