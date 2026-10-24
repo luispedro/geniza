@@ -972,9 +972,14 @@ committed) are listed but are not problems.
 `debug import-local PATH` (development only) ingests a Maildir tree or an
 mbox into a store to exercise ingest on real volume before any network
 code exists. It writes no journal events, so it is not a migration path.
-The received date is a Maildir file's modification time (offlineimap sets
-it from the server) or an mbox `From` line's date, and Maildir messages go
-in oldest first. Running it again stores nothing new, so a second run
+Local files rarely carry the server's received date (offlineimap leaves a
+Maildir file's modification time at the download), so it is taken from the
+message: the first `Received:` line with a usable date (the last hop),
+else `Delivery-date:`, else an mbox `From ` line's date, else `Date:` (all
+that sent mail and drafts have), else the file's modification time. Dates
+before 1980 or more than a day in the future are skipped. Maildir messages
+go in oldest first. An mbox is read as it is: whether `>From ` in a body is
+an escape cannot be told, so it is kept. Running it again stores nothing new, so a second run
 reporting every message as already stored, followed by a clean `verify`,
 shows that the store holds every source message byte for byte.
 

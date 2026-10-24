@@ -10,8 +10,8 @@ import pytest
 from conftest import corpus_files
 
 from geniza import cli
-from geniza.debug import _from_date
-from geniza.store import attachments, segment
+from geniza.debug import _from_date, received_date
+from geniza.store import attachments, reader, segment
 from geniza.store.attachments import AttachmentWriter
 from geniza.store.ingest import message_id
 from geniza.store.lock import StoreLock
@@ -59,6 +59,12 @@ def store(config: Path, maildir: Path) -> Path:
     return store_of(config)
 
 
+def stored(store: Path) -> list[bytes]:
+    """The corpus messages in the order of the store's records."""
+    by_id = {message_id(m): m for m in MSGS}
+    return [by_id[h.id] for p in segment.segments(store) for _, h in segment.scan(p)]
+
+
 def test_import_local(
     config: Path, maildir: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -71,9 +77,14 @@ def test_import_local(
     assert (store / "store.toml").exists()
     [path] = segment.segments(store)
     headers = [h for _, h in segment.scan(path)]
-    # Oldest first: the corpus was given decreasing mtimes.
-    assert [h.id for h in headers] == [message_id(m) for m in reversed(MSGS)]
-    assert headers[-1].received == datetime.fromtimestamp(1_700_000_000, UTC)
+    assert sorted(h.id for h in headers) == sorted(message_id(m) for m in MSGS)
+    # Dated from the messages, mtime only as a fallback, and oldest first.
+    for h, data in zip(headers, stored(store), strict=True):
+        files = [p for p in maildir.rglob("*:2,S") if p.read_bytes() == data]
+        mtime = files[0].stat().st_mtime
+        fallback = datetime.fromtimestamp(int(mtime), UTC)
+        assert h.received == received_date(data, fallback=fallback)
+    assert [h.received for h in headers] == sorted(h.received for h in headers)
 
     assert run(config, "--json", "debug", "import-local", maildir) == 0
     report = json.loads(capsys.readouterr().out)
@@ -83,20 +94,24 @@ def test_import_local(
 
 
 def test_import_local_mbox(config: Path, tmp_path: Path) -> None:
+    sent = b"Subject: sent\nDate: Sun, 2 Mar 2025 23:59:00 -0800\n\nbody\n"
+    delivered = b"Received: from a; Fri, 9 May 2025 08:07:06 +0000\n" + sent
     mbox = tmp_path / "in.mbox"
     box = mailbox.mbox(mbox)
-    for data in MSGS[:5]:
+    for data in (sent, delivered):
         m = mailbox.mboxMessage(data)
         m.set_from("someone@example.org Mon Jan  5 10:11:12 2015")
         box.add(m)
     box.close()
     assert run(config, "debug", "import-local", mbox) == 0
-    [path] = segment.segments(store_of(config))
-    headers = [h for _, h in segment.scan(path)]
-    assert len(headers) == 5
-    assert {h.received for h in headers} == {
-        datetime(2015, 1, 5, 10, 11, 12, tzinfo=UTC)
+    store = store_of(config)
+    [path] = segment.segments(store)
+    got = {h.id: h.received for _, h in segment.scan(path)}
+    assert got == {
+        message_id(sent): datetime(2015, 1, 5, 10, 11, 12, tzinfo=UTC),
+        message_id(delivered): datetime(2025, 5, 9, 8, 7, 6, tzinfo=UTC),
     }
+    assert reader.message(store, path.relative_to(store).as_posix(), 0) == sent
 
 
 def test_from_date() -> None:
@@ -122,7 +137,7 @@ def test_export_mbox(store: Path, config: Path, tmp_path: Path) -> None:
     assert run(config, "export", "--mbox", out) == 0
     box = mailbox.mbox(out, create=False)
     got = [unescape(box.get_bytes(k)) for k in box.iterkeys()]
-    want = [m if m.endswith(b"\n") else m + b"\n" for m in reversed(MSGS)]
+    want = [m if m.endswith(b"\n") else m + b"\n" for m in stored(store)]
     assert got == want
     # An existing file is not overwritten.
     before = out.read_bytes()

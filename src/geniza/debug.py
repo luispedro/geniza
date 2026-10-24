@@ -5,9 +5,10 @@ offlineimap writes them) or an mbox into a store, to exercise ingest on real
 volume before there is any network code. It is not a migration path: it
 writes no journal events, so the store knows nothing of mailboxes or flags.
 
-The received date is a Maildir file's modification time (offlineimap sets it
-to the server's INTERNALDATE) or the date of an mbox ``From`` line.
-Maildir messages are ingested oldest first, as an initial sync would.
+Local files rarely carry the server's received date (offlineimap leaves a
+Maildir file's modification time at the download), so it is taken from the
+message, as ``received_date`` describes. Messages are ingested oldest
+first, as an initial sync would.
 """
 
 import argparse
@@ -17,9 +18,12 @@ import os
 import time
 from collections import Counter
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from email import policy
+from email.parser import BytesHeaderParser
+from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, BinaryIO
 
 from geniza.config import init_store, load
 from geniza.mime.recipes import Mode
@@ -33,7 +37,83 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+#: Header blocks are read in chunks of this size, up to HEADER_MAX.
+HEADER_CHUNK = 8 * 1024
+HEADER_MAX = 256 * 1024
+
+EARLIEST = datetime(1980, 1, 1, tzinfo=UTC)
+
 type Source = Iterator[tuple[str, bytes | OSError, datetime]]
+
+
+def _header_end(data: bytes) -> int | None:
+    ends = [
+        i + len(sep) for sep in (b"\r\n\r\n", b"\n\n") if (i := data.find(sep)) >= 0
+    ]
+    return min(ends, default=None)
+
+
+def _header_block(data: bytes) -> bytes:
+    return data[: _header_end(data) or len(data)]
+
+
+def _read_head(f: BinaryIO) -> bytes:
+    """The start of a file, up to the end of its header block."""
+    head = b""
+    while len(head) < HEADER_MAX and _header_end(head) is None:
+        chunk = f.read(HEADER_CHUNK)
+        if not chunk:
+            break
+        head += chunk
+    return head
+
+
+def _date(value: object, now: datetime) -> datetime | None:
+    """A header date, if it parses and is plausible; UTC if it has no zone."""
+    try:
+        d = parsedate_to_datetime(" ".join(str(value).split()))
+    except TypeError, ValueError, IndexError, OverflowError:
+        return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=UTC)
+    d = d.astimezone(UTC)
+    return d if EARLIEST <= d <= now + timedelta(days=1) else None
+
+
+def received_date(
+    data: bytes,
+    *,
+    hint: datetime | None = None,
+    fallback: datetime,
+    now: datetime | None = None,
+) -> datetime:
+    """When the message arrived, as best the message tells.
+
+    In order: the first ``Received:`` line with a usable date (the last hop,
+    which accepted the message for the mailbox), ``Delivery-date:``, the
+    ``hint`` (an mbox ``From`` line's date), ``Date:`` (the sender's clock,
+    and all that sent mail and drafts have), else ``fallback``. Dates
+    before 1980 or more than a day in the future are skipped.
+    """
+    now = now or datetime.now(UTC)
+    try:
+        headers = BytesHeaderParser(policy=policy.compat32).parsebytes(
+            _header_block(data)
+        )
+        received = [str(r) for r in headers.get_all("Received", [])]
+        delivery, sent = headers["Delivery-date"], headers["Date"]
+    except Exception:  # a date is not worth failing an import over
+        received, delivery, sent = [], None, None
+    for line in received:
+        if ";" in line and (d := _date(line.rsplit(";", 1)[1], now)):
+            return d
+    if delivery is not None and (d := _date(delivery, now)):
+        return d
+    if hint is not None and EARLIEST <= hint <= now + timedelta(days=1):
+        return hint
+    if sent is not None and (d := _date(sent, now)):
+        return d
+    return fallback
 
 
 def maildir_messages(root: Path) -> Source:
@@ -41,18 +121,21 @@ def maildir_messages(root: Path) -> Source:
     found = []
     for path in maildir_files(root):
         try:
-            mtime = os.stat(path).st_mtime
+            with open(path, "rb") as f:
+                head = _read_head(f)
+                mtime = os.fstat(f.fileno()).st_mtime
         except OSError as e:
             yield path, e, datetime.now(UTC)
             continue
-        found.append((mtime, path))
-    for mtime, path in sorted(found):
+        fallback = datetime.fromtimestamp(int(mtime), UTC)
+        found.append((received_date(head, fallback=fallback), path))
+    for received, path in sorted(found):
         try:
             with open(path, "rb") as f:
                 data: bytes | OSError = f.read()
         except OSError as e:
             data = e
-        yield path, data, datetime.fromtimestamp(int(mtime), UTC)
+        yield path, data, received
 
 
 def _from_date(line: bytes) -> datetime | None:
@@ -68,12 +151,15 @@ def _from_date(line: bytes) -> datetime | None:
 
 
 def mbox_messages(path: Path) -> Source:
+    """``(key, data, received)`` in mbox order."""
     box = mailbox.mbox(path, create=False)
     try:
         for key in box.iterkeys():
             with box.get_file(key, from_=True) as f:
-                received = _from_date(f.readline()) or datetime.now(UTC)
-            yield f"{path}#{key}", box.get_bytes(key), received
+                hint = _from_date(f.readline())
+            data = box.get_bytes(key)
+            now = datetime.now(UTC)
+            yield f"{path}#{key}", data, received_date(data, hint=hint, fallback=now)
     finally:
         box.close()
 
