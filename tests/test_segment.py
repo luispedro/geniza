@@ -23,6 +23,7 @@ from geniza.store.segment import (
     recover,
     scan,
     segment_name,
+    segments,
     unescape,
 )
 
@@ -248,3 +249,36 @@ def test_writer_recovers_a_torn_segment(tmp_path: Path) -> None:
     assert tmp_path / segment == path
     assert offset == last
     assert [m for _, _, m in records(path)][-1] == b"after\n"
+
+
+def test_writer_recovers_an_earlier_months_segment(tmp_path: Path) -> None:
+    path, last, full = three_records(tmp_path)
+    path.write_bytes(full[: last + 10])
+    november = Clock(datetime(2026, 11, 1, tzinfo=UTC))
+    with SegmentWriter(tmp_path, clock=november) as w:
+        loc = w.append(b"after\n", id=sha(b"after\n"), size=6, received=T0)
+    assert loc.segment == "segments/2026/2026-11.zst"
+    assert path.read_bytes() == full[:last]
+
+
+def test_segments_are_listed_in_order(tmp_path: Path) -> None:
+    names = [
+        "segments/2025/2025-12.zst",
+        "segments/2026/2026-02.zst",
+        "segments/2026/2026-02.1.zst",
+        "segments/2026/2026-02.10.zst",
+        "segments/2026/2026-02.2.zst",
+        "segments/2026/2026-10.zst",
+    ]
+    for name in [*reversed(names), "segments/2026/2025-01.zst", "segments/x.zst"]:
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).touch()
+    assert [p.relative_to(tmp_path).as_posix() for p in segments(tmp_path)] == [
+        names[0],
+        names[1],
+        names[2],
+        names[4],
+        names[3],
+        names[5],
+    ]
+    assert segments(tmp_path / "empty") == []

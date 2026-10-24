@@ -509,9 +509,15 @@ Recipes:
 After stripping, the full message is reconstructed from the stripped bytes
 plus blobs and hashed; the record is only committed if the hash equals `id`.
 Reconstruction works from the record header as it will be written
-(serialised and parsed back), not from in-memory recipes, so a header that
-lacks something reconstruction needs fails here. Lossless storage is thus
-checked on every write, not assumed.
+(serialised and parsed back), not from in-memory recipes, and from the
+attachment files as they are on disk, so a header that lacks something
+reconstruction needs fails here. Each copy's range is checked to hold the
+encoded body too. Lossless storage is thus checked on every write, not
+assumed. If the check fails (a recipe bug), the message is stored with
+every attachment as a copy and decorations inline, which needs no
+reconstruction, and a warning is logged. An attachment file that is
+missing or does not hold its blob is store damage, not a quirk of the
+message: ingest stops with an error.
 
 Extraction happens inside `multipart/signed` content too: since
 reconstruction is byte-exact, signatures still verify.
@@ -766,11 +772,14 @@ written under the lock, by exactly one process. Readers (`search`, `show`, `expo
 4. `sync.json`: temp + `fsync` + `rename`.
 
 A crash at any point leaves at worst orphaned attachments (picked up by
-`verify`/`compact`), a torn record at the end of the open segment, or a
+`verify`/`compact`), a torn record at the end of the last segment, or a
 torn tail of the last journal file (see [the journal](#state-the-journal)).
-When the writer opens a segment, it removes a torn record at its end: the
-records' headers are walked (without decompressing bodies) and the last
-record is checked in full (complete, decompresses, checksum and
+When the writer opens a segment, it removes a torn record at its end;
+before its first record it does the same for the store's last segment,
+even if it then writes to a new month's (a crash on the last day of a
+month leaves the tear in that month's segment). The records' headers are
+walked (without decompressing bodies) and the last record is checked in
+full (complete, decompresses, checksum and
 `stripped_size` match). A record that runs past the end of the file, a
 last record that fails the check, or a zero-filled tail is truncated, with
 a warning. Since one record is in flight at a time and each is fsynced,

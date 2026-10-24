@@ -17,7 +17,7 @@ from geniza.mime.recipes import (
     Recipe,
     plan_message,
 )
-from geniza.mime.strip import Cut, reconstruct, strip
+from geniza.mime.strip import Cut, moved, reconstruct, strip
 from geniza.store.attachments import blob_id, file_name
 from geniza.store.parts import PartRecord, parse_parts, stubs
 
@@ -239,19 +239,14 @@ def test_corpus_reconstructs_from_serialised_parts(
     stripped, made = strip(data, cuts)
     stub_at = {cut.start: stub for cut, stub in zip(cuts, made, strict=True)}
 
-    def shift(pos: int) -> int:
-        """Where ``pos`` (not inside a cut) lands in the stripped message."""
-        return pos + sum(
-            stub_at[c.start].length - (c.end - c.start) for c in cuts if c.end <= pos
-        )
-
     entries = []
     for p, blob, file in records:
         if p.recipe is not None:
             stub = stub_at[p.part.body_start]
             offset, length = stub.offset, stub.length
         else:
-            offset, length = shift(p.part.body_start), p.part.end - p.part.body_start
+            offset = moved(p.part.body_start, cuts, made)
+            length = p.part.end - p.part.body_start
         part = PartRecord(
             path=p.part.path,
             kind=p.cls,

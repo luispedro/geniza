@@ -62,3 +62,13 @@ def reconstruct(
         pos = stub.offset + stub.length
     out += stripped[pos:]
     return bytes(out)
+
+
+def moved(pos: int, cuts: Sequence[Cut], stubs: Sequence[Stub]) -> int:
+    """Where ``pos`` of the original message (not inside a cut) is in the
+    stripped one; ``cuts`` and ``stubs`` as ``strip`` sorted and made them."""
+    return pos + sum(
+        stub.length - (cut.end - cut.start)
+        for cut, stub in zip(cuts, stubs, strict=True)
+        if cut.end <= pos
+    )

@@ -330,6 +330,27 @@ def month_segments(store: Path, year: int, month: int) -> list[tuple[int, Path]]
     return sorted(found)
 
 
+def segments(store: Path) -> list[Path]:
+    """Every segment of the store, in (year, month, index) order."""
+    found = []
+    for year in (store / "segments").glob("[0-9][0-9][0-9][0-9]"):
+        for p in year.glob("*.zst"):
+            m = _SEGMENT_NAME.fullmatch(p.name)
+            if m and m[1] == year.name:
+                found.append(((int(m[1]), int(m[2]), int(m[3] or 0)), p))
+    return [p for _, p in sorted(found)]
+
+
+def recover_last(store: Path) -> int:
+    """``recover`` the last segment of the store, if there is one.
+
+    A crash can only tear the last record written, which is at the end of
+    the last segment, whatever month it belongs to.
+    """
+    found = segments(store)
+    return recover(found[-1]) if found else 0
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -348,7 +369,8 @@ class SegmentWriter:
     The open segment is the last one of the month the record is written in
     (UTC). A record that would take it over ``cap`` goes to a new rollover
     segment, unless the segment is empty. When a segment is opened, a torn
-    record at its end is removed first.
+    record at its end is removed first; before the first one, so is one at
+    the end of the store's last segment, even if it is of an earlier month.
     """
 
     def __init__(
@@ -366,6 +388,7 @@ class SegmentWriter:
         self._file: BinaryIO | None = None
         self._key: tuple[int, int, int] = (0, 0, 0)
         self._size = 0
+        self._recovered = False
 
     def __enter__(self) -> Self:
         return self
@@ -413,6 +436,10 @@ class SegmentWriter:
 
     def _open(self, year: int, month: int, index: int | None = None) -> None:
         self.close()
+        if not self._recovered:
+            # The last record written may be in an earlier month's segment.
+            recover_last(self.store)
+            self._recovered = True
         if index is None:
             existing = month_segments(self.store, year, month)
             index = existing[-1][0] if existing else 0
