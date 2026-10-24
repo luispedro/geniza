@@ -325,7 +325,10 @@ geniza itself reads exactly `stripped_size` bytes and loses nothing.
       // "layout": [[72, 217], [60, 1], [12, 1], [72, 33], [28, 1]],
       //                         // base64 only, if lines are irregular
       // "pad_bits": 6,          // base64 only, if not zero
+      // "crlf_to_lf": true,     // identity only, if the file has LF
+      //                         // where the encoded form has CRLF
       "eol": "crlf",             // line endings of the encoded form
+      //                         // (of its last line, if mixed)
       "final_eol": true
     }
   ]
@@ -476,8 +479,11 @@ Recipes:
   An empty base64 body has nothing to extract and stays inline.
 - `identity` (`7bit`, `8bit`, `binary`): the body is the content. For
   `text/*` parts with consistent CRLF line endings, the file is written
-  with LF (`eol: "crlf"` records the conversion), so a `.py` or `.patch`
-  file is usable directly. A `text/*` part with mixed line endings is
+  with LF (`crlf_to_lf: true` records the conversion), so a `.py` or
+  `.patch` file is usable directly. `eol` alone cannot record it, since
+  unconverted bodies (non-text parts, mixed line endings) can have CRLF
+  too; reconstruction never guesses from the file's content. A `text/*`
+  part with mixed line endings is
   stubbed without conversion (`eol` is then that of its last line): the
   file is the body as is, which is what copy mode would write too, so
   copy would only keep a second copy of the same bytes in the message.
@@ -493,7 +499,10 @@ Recipes:
 
 After stripping, the full message is reconstructed from the stripped bytes
 plus blobs and hashed; the record is only committed if the hash equals `id`.
-Lossless storage is thus checked on every write, not assumed.
+Reconstruction works from the record header as it will be written
+(serialised and parsed back), not from in-memory recipes, so a header that
+lacks something reconstruction needs fails here. Lossless storage is thus
+checked on every write, not assumed.
 
 Extraction happens inside `multipart/signed` content too: since
 reconstruction is byte-exact, signatures still verify.

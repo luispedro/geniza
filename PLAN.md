@@ -178,8 +178,8 @@ Tests:
 ### M5 — Ingest, show, export, verify
 
 - `ingest.py`: classify → write attachment files → build stripped message →
-  reconstruct and hash → append record → journal. Follows the write
-  ordering in DESIGN.md exactly.
+  reconstruct (from the serialised record header) and hash → append
+  record → journal. Follows the write ordering in DESIGN.md exactly.
 - `geniza show ID --raw`, `export --mbox`, `verify`.
 - A development-only `geniza debug import-local PATH` (Maildir/mbox) to
   exercise the pipeline on real volume before any network code. It is not a
