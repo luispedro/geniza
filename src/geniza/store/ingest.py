@@ -8,6 +8,10 @@ if that hashes to the message id is the record appended. If it does not,
 the message is stored again with every attachment as a copy, which needs no
 rebuilding, and a warning is logged.
 
+While the store is being initialized (DESIGN.md, "On-disk layout"), a
+message's record and new attachment files go into the month it was
+received in; afterwards, into the month it is stored in.
+
 Journal events come next and are the caller's: a batch of messages goes into
 segments, then their events into the journal. The caller holds the store
 lock throughout.
@@ -23,6 +27,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Self
 
+from geniza.config import is_initialized
 from geniza.mime.classify import PartClass
 from geniza.mime.names import attachment_name
 from geniza.mime.recipes import Mode, PartPlan, Policy, plan_message
@@ -100,9 +105,12 @@ class _Extracted:
 class Ingester:
     """Stores messages into segments and attachment files.
 
-    ``lock`` must be held for ``store`` while the ingester is used. On
-    creation, a torn record at the end of the store is removed; without a
-    ``catalog``, one is then built by scanning the segments.
+    ``lock`` must be held for ``store`` while the ingester is used.
+    ``initializing`` defaults to whether the store's initialization is
+    still going on. On creation, a torn record is removed: at the end of
+    any segment while initializing (records then go to any month), else at
+    the end of the last one. Without a ``catalog``, one is then built by
+    scanning the segments.
     """
 
     def __init__(
@@ -115,13 +123,21 @@ class Ingester:
         cap: int = SEGMENT_CAP,
         level: int = zstd.COMPRESSION_LEVEL_DEFAULT,
         clock: Callable[[], datetime] = _now,
+        initializing: bool | None = None,
     ) -> None:
         if not lock.locked or lock.store.resolve() != store.resolve():
             raise RuntimeError(f"{store}: ingest needs the store lock")
         self.store = store
         self.lock = lock
         self.policy = policy or Policy()
-        segment.recover_last(store)
+        self.clock = clock
+        if initializing is None:
+            initializing = not is_initialized(store)
+        self.initializing = initializing
+        if initializing:
+            segment.recover_all(store)
+        else:
+            segment.recover_last(store)
         self.catalog = catalog if catalog is not None else Catalog.scan(store)
         self.segments = SegmentWriter(store, cap=cap, level=level, clock=clock)
         self.attachments = AttachmentWriter(store, clock=clock)
@@ -140,38 +156,53 @@ class Ingester:
         id = message_id(data)
         if (where := self.catalog.messages.get(id)) is not None:
             return Added(id, *where, new=False)
+        month = self._month(received)
         plans = plan_message(data, self.policy)
-        stripped, parts, bodies = self._strip(data, plans)
+        stripped, parts, bodies = self._strip(data, plans, month)
         entries = [p.to_json() for p in parts]
         fallback = not self._rebuilds(data, id, stripped, entries, bodies)
         if fallback:
             log.warning("%s: stripped message does not rebuild; using copies", id)
             plans = [_without_stub(p) for p in plans]
-            stripped, parts, bodies = self._strip(data, plans)
+            stripped, parts, bodies = self._strip(data, plans, month)
             entries = [p.to_json() for p in parts]
             if not self._rebuilds(data, id, stripped, entries, bodies):
                 raise IngestError(f"{id}: message does not rebuild from copies")
         location = self.segments.append(
-            stripped, id=id, size=len(data), received=received, parts=entries
+            stripped,
+            id=id,
+            size=len(data),
+            received=received,
+            parts=entries,
+            month=month,
         )
         self.catalog.messages[id] = (location.segment, location.offset)
         return Added(
             id, location.segment, location.offset, True, tuple(parts), fallback
         )
 
-    def _file(self, plan: PartPlan, blob: str) -> str:
+    def _month(self, received: datetime) -> tuple[int, int] | None:
+        """The month (year, month) to write a message into while
+        initializing: when it was received, but never after now. None
+        (the month it is stored in) afterwards."""
+        if not self.initializing:
+            return None
+        year, month = min(received, self.clock()).astimezone(UTC).timetuple()[:2]
+        return year, month
+
+    def _file(self, plan: PartPlan, blob: str, month: tuple[int, int] | None) -> str:
         """The attachment file of ``blob``, written if the store lacks it."""
         if (file := self.catalog.blobs.get(blob)) is not None:
             return file
         assert plan.content is not None
         part = plan.part
         name = attachment_name(part.filename, part.path, part.content_type)
-        file = self.attachments.put(plan.content, name, blob=blob).file
+        file = self.attachments.put(plan.content, name, blob=blob, month=month).file
         self.catalog.blobs[blob] = file
         return file
 
     def _strip(
-        self, data: bytes, plans: Sequence[PartPlan]
+        self, data: bytes, plans: Sequence[PartPlan], month: tuple[int, int] | None
     ) -> tuple[bytes, list[PartRecord], list[tuple[int, int]]]:
         """Write the files of the extracted parts and strip the stubs out.
         Returns the stripped message, its part records and where each part's
@@ -181,7 +212,7 @@ class Ingester:
             if p.mode is not Mode.INLINE:
                 assert p.content is not None
                 blob = blob_id(p.content)
-                extracted.append(_Extracted(p, blob, self._file(p, blob)))
+                extracted.append(_Extracted(p, blob, self._file(p, blob, month)))
         extracted.sort(key=lambda e: e.plan.part.body_start)
         cuts = [
             Cut(e.plan.part.body_start, e.plan.part.end, e.file, e.plan.recipe)

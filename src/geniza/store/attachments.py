@@ -108,23 +108,31 @@ def _fsync_dir(path: Path) -> None:
 
 
 class AttachmentWriter:
-    """Writes new blobs into the month directory of the current month (UTC).
+    """Writes new blobs into a month directory: that of the current month
+    (UTC), unless ``put`` is given another.
 
     The caller looks a blob up (in the index) before calling ``put``; ``put``
-    only checks the current month directory. When a month directory is
+    only checks the target month directory. When a month directory is
     first used, temp files left there by a crash are removed.
     """
 
     def __init__(self, store: Path, *, clock: Callable[[], datetime] = _now) -> None:
         self.store = store
         self.clock = clock
-        self._month: tuple[int, int] | None = None
-        #: Hash prefix → file name, for the files of the current month.
-        self._files: dict[str, str] = {}
+        #: Per month used so far: hash prefix → file name.
+        self._months: dict[tuple[int, int], dict[str, str]] = {}
 
-    def put(self, content: bytes, name: str, *, blob: str | None = None) -> Stored:
-        """Store ``content`` as a file named ``name`` unless the current month
-        already has it (then the first name wins).
+    def put(
+        self,
+        content: bytes,
+        name: str,
+        *,
+        blob: str | None = None,
+        month: tuple[int, int] | None = None,
+    ) -> Stored:
+        """Store ``content`` as a file named ``name`` in the directory of
+        ``month`` (year, month), by default the current one, unless that
+        directory already has it (then the first name wins).
 
         ``blob`` saves hashing when the caller has already done it; it is
         trusted. A different blob with the same hash prefix raises
@@ -133,12 +141,12 @@ class AttachmentWriter:
         blob = blob or blob_id(content)
         target = file_name(blob, name)
         prefix = target[:PREFIX_LEN]
-        year, month = self.clock().astimezone(UTC).timetuple()[:2]
-        if self._month != (year, month):
-            self._open(year, month)
-        directory = self.store / month_dir(year, month)
-        if (existing := self._files.get(prefix)) is not None:
-            file = f"{month_dir(year, month)}/{existing}"
+        year, mon = month or self.clock().astimezone(UTC).timetuple()[:2]
+        if (files := self._months.get((year, mon))) is None:
+            files = self._months[year, mon] = self._open(year, mon)
+        directory = self.store / month_dir(year, mon)
+        if (existing := files.get(prefix)) is not None:
+            file = f"{month_dir(year, mon)}/{existing}"
             if blob_id((directory / existing).read_bytes()) != blob:
                 raise AttachmentError(f"{file}: hash prefix shared with {blob}")
             return Stored(blob, file, new=False)
@@ -154,16 +162,17 @@ class AttachmentWriter:
             tmp.unlink(missing_ok=True)
             raise
         _fsync_dir(directory)
-        self._files[prefix] = target
-        return Stored(blob, f"{month_dir(year, month)}/{target}", new=True)
+        files[prefix] = target
+        return Stored(blob, f"{month_dir(year, mon)}/{target}", new=True)
 
-    def _open(self, year: int, month: int) -> None:
+    def _open(self, year: int, month: int) -> dict[str, str]:
+        """Create or clean up a month directory; returns its files by prefix."""
         directory = self.store / month_dir(year, month)
         if not directory.exists():
             directory.mkdir(parents=True)
             _fsync_dir(directory.parent)
             _fsync_dir(directory.parent.parent)
-        self._files = {}
+        files: dict[str, str] = {}
         for p in sorted(directory.iterdir()):
             if _TEMP_NAME.fullmatch(p.name):
                 log.warning("%s: removing a temp file left by a crash", p)
@@ -171,5 +180,5 @@ class AttachmentWriter:
             elif parsed := parse_file_name(p.name):
                 # Two files with one prefix can only come from outside
                 # geniza; keep the first in name order.
-                self._files.setdefault(parsed[0], p.name)
-        self._month = (year, month)
+                files.setdefault(parsed[0], p.name)
+        return files

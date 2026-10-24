@@ -10,6 +10,7 @@ from conftest import corpus_files
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from geniza.config import init_store, is_initialized, mark_initialized
 from geniza.mime.classify import PartClass
 from geniza.mime.recipes import Mode, Policy
 from geniza.store import attachments, reader, segment
@@ -100,9 +101,10 @@ def test_blob_is_written_once(ing: Ingester) -> None:
 def test_blob_from_an_earlier_month_is_reused(tmp_path: Path) -> None:
     data = CORPUS["base64_76_crlf"]
     other = data.replace(b"Subject: ", b"Subject: Re: ", 1)
-    for ing in ingester(tmp_path, clock=Clock()):
+    for ing in ingester(tmp_path, clock=Clock(), initializing=False):
         first = ing.add(data, T0)
-    for ing in ingester(tmp_path, clock=Clock(datetime(2026, 11, 2, tzinfo=UTC))):
+    later = Clock(datetime(2026, 11, 2, tzinfo=UTC))
+    for ing in ingester(tmp_path, clock=later, initializing=False):
         second = ing.add(other, T0)
     assert second.segment == "segments/2026/2026-11.zst"
     assert second.parts[0].file == first.parts[0].file
@@ -181,16 +183,70 @@ def test_ingest_needs_the_lock(tmp_path: Path) -> None:
 
 
 def test_torn_record_is_removed_before_the_catalog_is_built(tmp_path: Path) -> None:
-    for ing in ingester(tmp_path, clock=Clock()):
+    for ing in ingester(tmp_path, clock=Clock(), initializing=False):
         a = ing.add(CORPUS["plain_text_lf"], T0)
         b = ing.add(CORPUS["base64_76_crlf"], T0)
     path = tmp_path / a.segment
     path.write_bytes(path.read_bytes()[: b.offset + 20])
-    for ing in ingester(tmp_path, clock=Clock(datetime(2026, 11, 2, tzinfo=UTC))):
+    later = Clock(datetime(2026, 11, 2, tzinfo=UTC))
+    for ing in ingester(tmp_path, clock=later, initializing=False):
         assert set(ing.catalog.messages) == {a.id}
         again = ing.add(CORPUS["base64_76_crlf"], T0)
     assert again.new
     assert again.segment == "segments/2026/2026-11.zst"
+    assert path.stat().st_size == b.offset
+
+
+def test_initializing_store_is_laid_out_by_received_month(tmp_path: Path) -> None:
+    data = CORPUS["base64_76_crlf"]
+    other = data.replace(b"Subject: ", b"Subject: Re: ", 1)
+    old = datetime(2019, 3, 4, 5, 6, 7, tzinfo=UTC)
+    future = datetime(2027, 1, 1, tzinfo=UTC)
+    for ing in ingester(tmp_path, clock=Clock()):
+        assert ing.initializing
+        a = ing.add(data, old)
+        b = ing.add(CORPUS["plain_text_lf"], T0)
+        c = ing.add(other, future)
+    assert a.segment == "segments/2019/2019-03.zst"
+    assert a.parts[0].file.startswith("attachments/2019/03/")
+    assert b.segment == "segments/2026/2026-10.zst"
+    # Never after the month it is stored in; the blob is the 2019 file.
+    assert c.segment == "segments/2026/2026-10.zst"
+    assert c.parts[0].file == a.parts[0].file
+    header, _ = segment.read(tmp_path / a.segment, a.offset)
+    assert (header.received, header.stored) == (old, T0)
+    for added, msg in [(a, data), (b, CORPUS["plain_text_lf"]), (c, other)]:
+        assert rebuild(tmp_path, added.segment, added.offset) == msg
+
+
+def test_initialized_store_is_laid_out_by_stored_month(tmp_path: Path) -> None:
+    with StoreLock(tmp_path):
+        init_store(tmp_path)
+        assert not is_initialized(tmp_path)
+        mark_initialized(tmp_path, clock=Clock())
+        mark_initialized(tmp_path)  # once only; no error
+    assert is_initialized(tmp_path)
+    assert (tmp_path / "initialized").read_text() == "2026-10-23T14:02:11Z\n"
+    old = datetime(2019, 3, 4, tzinfo=UTC)
+    for ing in ingester(tmp_path, clock=Clock()):
+        assert not ing.initializing
+        added = ing.add(CORPUS["base64_76_crlf"], old)
+    assert added.segment == "segments/2026/2026-10.zst"
+    assert added.parts[0].file.startswith("attachments/2026/10/")
+
+
+def test_initializing_recovers_every_segment(tmp_path: Path) -> None:
+    """While initializing, the last record written can be in any month."""
+    later = datetime(2025, 5, 6, tzinfo=UTC)
+    for ing in ingester(tmp_path, clock=Clock()):
+        ing.add(CORPUS["plain_text_lf"], later)
+        a = ing.add(CORPUS["plain_text_crlf"], datetime(2019, 3, 4, tzinfo=UTC))
+        b = ing.add(CORPUS["base64_76_crlf"], datetime(2019, 3, 5, tzinfo=UTC))
+    path = tmp_path / a.segment
+    assert path != segment.segments(tmp_path)[-1]
+    path.write_bytes(path.read_bytes()[: b.offset + 20])
+    for ing in ingester(tmp_path, clock=Clock()):
+        assert set(ing.catalog.messages) == {message_id(CORPUS["plain_text_lf"]), a.id}
     assert path.stat().st_size == b.offset
 
 

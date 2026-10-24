@@ -38,8 +38,8 @@ Split everything into two trees:
 
 - **`store/`** — the archive. Backed up. Almost everything in it is
   append-only, and files are *sealed* (never modified again) once their
-  period is over. Borg therefore only ever sees new bytes at the end of a
-  few files, plus new files.
+  period is over and the store is initialized. Borg therefore only ever
+  sees new bytes at the end of a few files, plus new files.
 - **`cache/`** — everything derivable from `store/`: the SQLite/FTS index,
   remote-id maps, thread ids, extracted attachment text. Contains a
   `CACHEDIR.TAG` so `borg create --exclude-caches` skips it.
@@ -53,6 +53,7 @@ holds a bounded, small, deliberately volatile set of recent messages.
 ```
 store/                                    # default: $XDG_DATA_HOME/geniza/<store>/
   store.toml                              # store id and format version; written once
+  initialized                             # time initialization ended; written once
   .lock                                   # flock() target; single writer
   incoming/
     <account>/<sha256>.eml                # recent INBOX mail, raw, unmodified
@@ -72,9 +73,21 @@ cache/                                    # default: $XDG_CACHE_HOME/geniza/<sto
 ```
 
 Dates in `segments/` and `attachments/` paths are the **month the data was
-written**, not the message date. This is what makes them sealable: a month
-directory or segment never changes once that month is over. Message dates
-live in the index.
+written**, not the message date, once the store is **initialized**. This is
+what makes them sealable: a month directory or segment never changes once
+that month is over.
+
+While the store is being initialized, they are instead the month the
+message was **received** (never later than the month it is written in), so
+the history loaded into a new store is laid out by date: `zstdgrep` over
+`segments/2019/` searches 2019's mail. Initialization ends with the first
+sync that completes for every account of the store, which then writes
+`store/initialized` (once, under the lock, through a temp file; its
+content is the UTC time). `debug import-local` never ends it. From then on
+the month is the month of writing, so mail that arrives late (a newly
+added account's history, an old message moved out of an excluded mailbox)
+goes into the current month rather than reopening an old one. Message
+dates live in the index.
 
 `store.toml` holds a random store id (UUID), the on-disk format version
 and the creation time:
@@ -350,7 +363,9 @@ index can be rebuilt from headers alone (bodies are needed only for FTS).
 ### Segment size
 
 Segments are sealed at the end of their month or when they reach 256 MiB,
-whichever comes first. The month is the UTC month of the `stored` time. A
+whichever comes first, once the store is initialized. The month is the UTC
+month of the `stored` time, or of the `received` time while the store is
+being initialized (see [the layout](#on-disk-layout)). A
 record that would take the open segment past 256 MiB starts the next
 rollover segment instead (`2026-10.1.zst`, `2026-10.2.zst`, …), unless the
 segment is empty, so a single larger message still fits. The cap is not driven by borg: when the open segment
@@ -361,12 +376,12 @@ resynchronises past the gap, so even rewritten segments mostly deduplicate.
 The cap mainly limits the damage of a corrupted file.
 
 In normal operation the cap is rarely reached (at ~5 KB per compressed
-stripped message, 50 messages/day is ~7.5 MB/month). It matters for the
-**initial import**, which writes the whole history into the current month's
-rollover files. To keep those files useful for `zstdgrep` and locality, the
-initial import downloads messages **sorted by received date across all
-mailboxes**. This is free: dates (INTERNALDATE, `receivedAt`) are fetched
-before bodies anyway.
+stripped message, 50 messages/day is ~7.5 MB/month). The **initial import**
+writes each message into its received month, so the cap matters there
+only for months with a lot of mail. The initial import downloads messages
+**sorted by received date across all mailboxes**, so each month's segments
+are written in order and mostly one after the other. This is free: dates
+(INTERNALDATE, `receivedAt`) are fetched before bodies anyway.
 
 ## Attachments
 
@@ -539,7 +554,9 @@ is not planned.
 
 `attachments/YYYY/MM/<first 16 hex of blob hash>_<name>`
 
-- `YYYY/MM` is the month the blob was first written.
+- `YYYY/MM` is the month the blob was first written, or, while the store
+  is being initialized, the received month of the first message it was
+  written for (see [the layout](#on-disk-layout)).
 - `<name>` is the decoded filename (RFC 2231/2047), NFC-normalised, cut to
   what follows its last `\` (Windows clients send full paths such as
   `C:\Users\me\report.doc`), with `/`,
@@ -553,7 +570,7 @@ is not planned.
   The temp file is `.<hash prefix>.<random>.tmp` in the month directory;
   ones left by a crash are removed when the writer first uses that
   directory.
-- Before writing, the writer also looks in the current month directory for
+- Before writing, the writer also looks in the target month directory for
   a file with the same hash prefix (one orphaned by a crash before its
   message was committed, which the index does not know yet) and reuses it
   after checking its content hash. A file with that prefix but other
@@ -777,7 +794,8 @@ torn tail of the last journal file (see [the journal](#state-the-journal)).
 When the writer opens a segment, it removes a torn record at its end;
 before its first record it does the same for the store's last segment,
 even if it then writes to a new month's (a crash on the last day of a
-month leaves the tear in that month's segment). The records' headers are
+month leaves the tear in that month's segment). While the store is being
+initialized, records go to any month, so it does this for every segment. The records' headers are
 walked (without decompressing bodies) and the last record is checked in
 full (complete, decompresses, checksum and
 `stripped_size` match). A record that runs past the end of the file, a
@@ -788,7 +806,9 @@ is left alone.
 
 ## Sync
 
-Every mailbox of every account is synced unless excluded:
+Every mailbox of every account is synced unless excluded. The first sync
+that completes for every account of a store ends the store's
+initialization (see [the layout](#on-disk-layout)).
 
 ```toml
 [accounts.work.sync]

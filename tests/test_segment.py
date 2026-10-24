@@ -282,3 +282,24 @@ def test_segments_are_listed_in_order(tmp_path: Path) -> None:
         names[5],
     ]
     assert segments(tmp_path / "empty") == []
+
+
+def test_given_month(tmp_path: Path) -> None:
+    msgs = [b"Subject: %d\n\nbody\n" % i for i in range(4)]
+    months = [(2019, 3), (2026, 10), (2019, 3), None]
+    with SegmentWriter(tmp_path, clock=Clock()) as w:
+        locs = [
+            w.append(m, id=sha(m), size=len(m), received=T0, month=month)
+            for m, month in zip(msgs, months, strict=True)
+        ]
+    assert [loc.segment for loc in locs] == [
+        "segments/2019/2019-03.zst",
+        "segments/2026/2026-10.zst",
+        "segments/2019/2019-03.zst",
+        "segments/2026/2026-10.zst",
+    ]
+    for loc, m in zip(locs, msgs, strict=True):
+        header, stripped = read(tmp_path / loc.segment, loc.offset)
+        assert stripped == m
+        assert header.stored == T0
+    assert [m for _, _, m in records(tmp_path / locs[0].segment)] == msgs[0:3:2]

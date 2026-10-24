@@ -254,6 +254,9 @@ server is tested.
   in the docs.
 - Matching uses `emailId` only (`identity = "jmap"`); `type = "imap"`
   accounts are rejected by `config.py`.
+- The first sync that completes for every account of a store calls
+  `config.mark_initialized` (DESIGN.md, "On-disk layout"); until then
+  `Ingester` lays records out by received month.
 - Tests against an in-process fake JMAP server (stdlib `http.server`).
   Manual testing against a real Fastmail account with a read-only token.
 

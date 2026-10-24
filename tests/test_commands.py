@@ -105,13 +105,22 @@ def test_import_local_mbox(config: Path, tmp_path: Path) -> None:
     box.close()
     assert run(config, "debug", "import-local", mbox) == 0
     store = store_of(config)
-    [path] = segment.segments(store)
-    got = {h.id: h.received for _, h in segment.scan(path)}
-    assert got == {
-        message_id(sent): datetime(2015, 1, 5, 10, 11, 12, tzinfo=UTC),
-        message_id(delivered): datetime(2025, 5, 9, 8, 7, 6, tzinfo=UTC),
+    got = {
+        h.id: (p.relative_to(store).as_posix(), h.received)
+        for p in segment.segments(store)
+        for _, h in segment.scan(p)
     }
-    assert reader.message(store, path.relative_to(store).as_posix(), 0) == sent
+    assert got == {
+        message_id(sent): (
+            "segments/2015/2015-01.zst",
+            datetime(2015, 1, 5, 10, 11, 12, tzinfo=UTC),
+        ),
+        message_id(delivered): (
+            "segments/2025/2025-05.zst",
+            datetime(2025, 5, 9, 8, 7, 6, tzinfo=UTC),
+        ),
+    }
+    assert reader.message(store, "segments/2015/2015-01.zst", 0) == sent
 
 
 def test_from_date() -> None:

@@ -344,11 +344,18 @@ def segments(store: Path) -> list[Path]:
 def recover_last(store: Path) -> int:
     """``recover`` the last segment of the store, if there is one.
 
-    A crash can only tear the last record written, which is at the end of
-    the last segment, whatever month it belongs to.
+    Once a store is initialized, a crash can only tear the last record
+    written, which is at the end of the last segment, whatever month it
+    belongs to.
     """
     found = segments(store)
     return recover(found[-1]) if found else 0
+
+
+def recover_all(store: Path) -> int:
+    """``recover`` every segment of the store. While a store is being
+    initialized, the last record written can be in any month's segment."""
+    return sum(recover(p) for p in segments(store))
 
 
 def _now() -> datetime:
@@ -364,13 +371,14 @@ def _fsync_dir(path: Path) -> None:
 
 
 class SegmentWriter:
-    """Appends records to the open segment of the current month.
+    """Appends records to the open segment of a month.
 
-    The open segment is the last one of the month the record is written in
-    (UTC). A record that would take it over ``cap`` goes to a new rollover
-    segment, unless the segment is empty. When a segment is opened, a torn
-    record at its end is removed first; before the first one, so is one at
-    the end of the store's last segment, even if it is of an earlier month.
+    The month is the one the record is written in (UTC), unless ``append``
+    is given another. The open segment is that month's last one. A record
+    that would take it over ``cap`` goes to a new rollover segment, unless
+    the segment is empty. When a segment is first opened, a torn record at
+    its end is removed; before the first one, so is one at the end of the
+    store's last segment, even if it is of an earlier month.
     """
 
     def __init__(
@@ -389,6 +397,8 @@ class SegmentWriter:
         self._key: tuple[int, int, int] = (0, 0, 0)
         self._size = 0
         self._recovered = False
+        #: Segments already recovered (or created) by this writer.
+        self._checked: set[Path] = set()
 
     def __enter__(self) -> Self:
         return self
@@ -409,8 +419,10 @@ class SegmentWriter:
         size: int,
         received: datetime,
         parts: Sequence[Mapping[str, Any]] = (),
+        month: tuple[int, int] | None = None,
     ) -> Location:
-        """Append and fsync one record."""
+        """Append and fsync one record, to the segment of ``month`` (year,
+        month) if given, else of the month it is stored in."""
         stored = self.clock()
         data, header = encode_record(
             stripped,
@@ -421,11 +433,11 @@ class SegmentWriter:
             parts=parts,
             level=self.level,
         )
-        year, month = stored.astimezone(UTC).timetuple()[:2]
-        if self._file is None or self._key[:2] != (year, month):
-            self._open(year, month)
+        year, mon = month or stored.astimezone(UTC).timetuple()[:2]
+        if self._file is None or self._key[:2] != (year, mon):
+            self._open(year, mon)
         if self._size and self._size + len(data) > self.cap:
-            self._open(year, month, self._key[2] + 1)
+            self._open(year, mon, self._key[2] + 1)
         assert self._file is not None
         offset = self._size
         self._file.write(data)
@@ -444,13 +456,15 @@ class SegmentWriter:
             existing = month_segments(self.store, year, month)
             index = existing[-1][0] if existing else 0
         path = self.store / segment_name(year, month, index)
-        if path.exists():
-            recover(path)
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.touch()
-            _fsync_dir(path.parent)
-            _fsync_dir(path.parent.parent)
+        if path not in self._checked:
+            if path.exists():
+                recover(path)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+                _fsync_dir(path.parent)
+                _fsync_dir(path.parent.parent)
+            self._checked.add(path)
         self._file = open(path, "ab")  # noqa: SIM115  (closed by close())
         self._size = os.fstat(self._file.fileno()).st_size
         self._key = (year, month, index)

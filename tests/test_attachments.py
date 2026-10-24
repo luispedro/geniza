@@ -91,6 +91,23 @@ def test_months(tmp_path: Path) -> None:
     assert [f for _, f in scan(tmp_path)] == [a.file, b.file, again.file]
 
 
+def test_given_month(tmp_path: Path) -> None:
+    w = AttachmentWriter(tmp_path, clock=Clock())
+    a = w.put(b"a", "a.txt", month=(2019, 3))
+    b = w.put(b"b", "b.txt")
+    again = w.put(b"a", "other.txt", month=(2019, 3))
+    assert a.file.startswith("attachments/2019/03/")
+    assert b.file.startswith("attachments/2026/10/")
+    assert (again.file, again.new) == (a.file, False)
+    # Each month directory is cleaned up when first used.
+    d = tmp_path / "attachments/2018/01"
+    d.mkdir(parents=True)
+    tmp = d / f".{'a' * 16}.{'b' * 16}.tmp"
+    tmp.write_bytes(b"torn")
+    w.put(b"c", "c.txt", month=(2018, 1))
+    assert not tmp.exists()
+
+
 def test_prefix_collision(tmp_path: Path) -> None:
     w = AttachmentWriter(tmp_path, clock=Clock())
     s = w.put(b"real", "a.txt")

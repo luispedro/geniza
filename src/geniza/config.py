@@ -29,6 +29,7 @@ from geniza.mime.recipes import Policy
 FORMAT_VERSION = 1
 
 STORE_FILE = "store.toml"
+INITIALIZED_FILE = "initialized"
 CACHEDIR_TAG = "CACHEDIR.TAG"
 CACHE_ID_FILE = "store-id"
 #: Files in a cache that are built from one store; removed when the cache
@@ -568,6 +569,23 @@ def init_store(path: Path, *, clock: Callable[[], datetime] = _now) -> StoreInfo
     )
     _write_new(path / STORE_FILE, text, replace_existing=False)
     return read_store(path)
+
+
+def is_initialized(path: Path) -> bool:
+    """Whether the store's initialization is over (DESIGN.md, "On-disk
+    layout"): until then, records and attachment files go into the month
+    their message was received in."""
+    return (Path(path) / INITIALIZED_FILE).exists()
+
+
+def mark_initialized(path: Path, *, clock: Callable[[], datetime] = _now) -> None:
+    """End the store's initialization, if it is not over already. Written
+    once, under the store lock, after a complete first sync."""
+    file = Path(path) / INITIALIZED_FILE
+    if file.exists():
+        return
+    when = clock().astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _write_new(file, f"{when}\n", replace_existing=False)
 
 
 # --- cache -------------------------------------------------------------------

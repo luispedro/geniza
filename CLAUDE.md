@@ -41,7 +41,9 @@ silently diverging.
   reconstructed and its hash checked before it is committed.
 - **Append-only store.** Outside `incoming/`, nothing in a store is
   rewritten or deleted by sync. Segments and month directories are sealed
-  once their month is over. `sync.json` is the only file rewritten (atomically).
+  once their month is over and the store is initialized (until then they
+  are laid out by received month; DESIGN.md, "On-disk layout").
+  `sync.json` is the only file rewritten (atomically).
 - **Write ordering** (attachments → segment/incoming → journal → `sync.json`,
   each with `fsync`) is what crash recovery relies on; keep it.
 - **The cache is disposable.** Anything in `cache/` must be rebuildable by
