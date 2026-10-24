@@ -488,6 +488,14 @@ is not planned.
   type>`, with `.bin` when the type has no known extension.
 - The first name seen wins; other names are recorded in the index.
 - Files are written via temp file + `fsync` + `rename`, then made read-only.
+  The temp file is `.<hash prefix>.<random>.tmp` in the month directory;
+  ones left by a crash are removed when the writer first uses that
+  directory.
+- Before writing, the writer also looks in the current month directory for
+  a file with the same hash prefix (one orphaned by a crash before its
+  message was committed, which the index does not know yet) and reuses it
+  after checking its content hash. A file with that prefix but other
+  content (a 64-bit prefix collision) is an error, not a match.
 - The hash prefix lets `reindex` map files to blobs without re-hashing;
   `verify` re-hashes in full.
 - The index records each blob's `kind`, so tools can hide decorations.
