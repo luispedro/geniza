@@ -1,7 +1,7 @@
-# mailstore — design
+# geniza — design
 
-*Working name.* A one-way archiver that pulls mail from IMAP and/or JMAP
-servers into a local store designed to be:
+A one-way archiver that pulls mail from IMAP and/or JMAP servers into a local
+store designed to be:
 
 1. friendly to deduplicating backup tools (borg, restic),
 2. searchable,
@@ -14,7 +14,7 @@ In scope (v1):
 
 - One-way sync: server → local. Nothing is ever written to the server.
 - IMAP (with CONDSTORE/QRESYNC when available) and JMAP.
-- Multiple accounts sharing one store.
+- Several stores per configuration, each holding several accounts.
 - Full-text search via a rebuildable local index.
 
 Out of scope for now:
@@ -22,6 +22,8 @@ Out of scope for now:
 - Pushing local changes (flags, moves, deletions) back to the server.
 - Serving mail to local clients (Maildir view, local JMAP/IMAP server).
   The format must not preclude this, but nothing is designed for it yet.
+- Migrating existing local copies (offlineimap Maildirs etc.). A store is
+  always filled by syncing from the server.
 
 Target: Python ≥ 3.15.
 
@@ -36,7 +38,7 @@ Split everything into two trees:
 - **`cache/`** — everything derivable from `store/`: the SQLite/FTS index,
   remote-id maps, thread ids, extracted attachment text. Contains a
   `CACHEDIR.TAG` so `borg create --exclude-caches` skips it.
-  `mailstore reindex` rebuilds it from scratch.
+  `geniza reindex` rebuilds it from scratch.
 
 The single exception to "append-only" is `incoming/` (see below), which
 holds a bounded, small, deliberately volatile set of recent messages.
@@ -44,8 +46,8 @@ holds a bounded, small, deliberately volatile set of recent messages.
 ## On-disk layout
 
 ```
-store/
-  config.toml
+store/                                    # default: $XDG_DATA_HOME/geniza/<store>/
+  store.toml                              # store id and format version; written once
   .lock                                   # flock() target; single writer
   incoming/
     <sha256>.eml                          # recent INBOX mail, raw, unmodified
@@ -58,7 +60,7 @@ store/
     <account>/journal-2026-10.jsonl       # membership/flag events, append-only
     <account>/sync.json                   # small cursor file, rewritten atomically
 
-cache/                                    # default: $XDG_CACHE_HOME/mailstore/<store-id>/
+cache/                                    # default: $XDG_CACHE_HOME/geniza/<store>/
   CACHEDIR.TAG
   index.sqlite
 ```
@@ -68,6 +70,70 @@ written**, not the message date. This is what makes them sealable: a month
 directory or segment never changes once that month is over. Message dates
 live in the index.
 
+`store.toml` holds a random store id (UUID) and the on-disk format version.
+The index records the id of the store it was built from; on a mismatch (a
+cache directory reused for a different or restored store) it is discarded
+and rebuilt.
+
+## Configuration
+
+One configuration file, `$XDG_CONFIG_HOME/geniza/config.toml` (overridable
+with `--config`), describes any number of **stores**, and each **account**
+belongs to exactly one store. The configuration is not part of any store:
+nothing in it is needed to read an archive, only to sync into one.
+
+```toml
+default_store = "personal"   # optional; otherwise --store is needed with several stores
+
+# Defaults for every store; each key can be overridden per store.
+[attachments]
+min_size = 1
+decoration_min_size = "256KiB"
+
+[incoming]
+mailboxes = ["INBOX"]
+max_age = "7d"
+
+[stores.personal]
+# path  = "$XDG_DATA_HOME/geniza/personal"     (default)
+# cache = "$XDG_CACHE_HOME/geniza/personal"    (default)
+
+[stores.work]
+path = "/srv/archive/work"
+
+[stores.work.incoming]
+max_age = "14d"
+
+[accounts.fastmail]
+store = "personal"
+type = "jmap"
+url = "https://api.fastmail.com/jmap/session"
+token_command = "pass show mail/fastmail"
+
+[accounts.uni]
+store = "work"
+type = "imap"
+host = "imap.example.edu"
+user = "me"
+password_command = "pass show mail/uni"
+
+[accounts.uni.sync]
+exclude = ["junk"]
+```
+
+- Store names and account names are unique within the configuration and are
+  used as directory names (`<store>`, `state/<account>/`), so they are
+  restricted to `[a-z0-9_-]`.
+- Paths default to `$XDG_DATA_HOME/geniza/<store>` and
+  `$XDG_CACHE_HOME/geniza/<store>`, with the XDG fallbacks
+  (`~/.local/share`, `~/.cache`) when the variables are unset.
+- Store settings (`[attachments]`, `[incoming]`) are merged key by key:
+  built-in default ← top-level table ← `[stores.<name>.…]`.
+- Secrets never appear in the file: they are read from `*_command` output.
+- Renaming an account would orphan its `state/<account>/` directory, so a
+  rename is an explicit `geniza account rename OLD NEW`, which moves the
+  directory and updates the configuration.
+
 ## Message identity
 
 A message's id is `sha256:<hex>` of its raw RFC 5322 bytes exactly as
@@ -76,7 +142,7 @@ downloaded. Consequences:
 - A message in several mailboxes (IMAP copies, Gmail labels, JMAP
   `mailboxIds`) or several accounts is stored once.
 - Moves are pure state changes; no body is rewritten.
-- `mailstore verify` can check every message end to end.
+- `geniza verify` can check every message end to end.
 
 ## Message storage: segments
 
@@ -96,13 +162,13 @@ The body frame's content is chosen so that this output is a valid **mboxrd**
 file:
 
 ```
-From mailstore <asctime of received date>\n
+From geniza <asctime of received date>\n
 <stripped message, mboxrd-escaped: /^>*From / gets one more '>'>
 \n
 ```
 
 So `zstdcat segments/*/*.zst > all.mbox` and `zstdgrep` work with no
-mailstore code at all. Line endings inside the message are left as
+geniza code at all. Line endings inside the message are left as
 downloaded (CRLF or LF); only the `From ` line and separator use `\n`.
 
 Each body frame is compressed on its own (no shared dictionary), so appending
@@ -208,7 +274,7 @@ inferred. Then:
 - **stub** (preferred): re-encode the decoded bytes with the recipe. If the
   result is byte-identical to the original part body, replace the body
   (headers untouched) with a stub such as
-  `[mailstore: stored as attachments/2026/10/3fa9…_quarterly-report.pdf]`
+  `[geniza: stored as attachments/2026/10/3fa9…_quarterly-report.pdf]`
   plus the part's EOL. The file is now needed to reconstruct the message.
 - **copy** (fallback, attachments only): if re-encoding does not reproduce
   the original exactly, the file is still written, but the message keeps
@@ -337,7 +403,7 @@ an undo buffer for it.
 The **mass-drop guard** covers the same failures acting all at once, plus
 servers that wrongly return an empty listing. If a run would drop more than
 `max_drop_fraction` of `incoming/` or more than `max_drop_count` messages, it
-drops nothing and reports why. `mailstore sync --allow-mass-drop` overrides.
+drops nothing and reports why. `geniza sync --allow-mass-drop` overrides.
 
 ### Trash and Junk
 
@@ -430,8 +496,9 @@ exclude = []              # mailbox names (IMAP) or roles, e.g. ["junk"]
 
 ### IMAP (per mailbox)
 
-1. `SELECT` (with `QRESYNC` when supported). If UIDVALIDITY changed, journal
-   `reset` and treat every message as new (deduplication avoids downloads).
+1. `EXAMINE` (read-only, so not even `\Recent` is cleared; with `QRESYNC`
+   when supported). If UIDVALIDITY changed, journal `reset` and treat every
+   message as new (deduplication avoids downloads).
 2. **New messages:** `UID FETCH <uidnext>:* (UID RFC822.SIZE INTERNALDATE FLAGS
    BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])`, plus `EMAILID` or `X-GM-MSGID`
    when available. Match against stored messages as described in
@@ -496,7 +563,7 @@ The chosen method is recorded as `identity` in `sync.json`.
 
 #### Warning when there is no reliable id
 
-When an account falls back to `headers`, `mailstore sync` prints a warning
+When an account falls back to `headers`, `geniza sync` prints a warning
 on that account's first sync, and again whenever the method gets worse
 (e.g. a server migration loses OBJECTID):
 
@@ -515,7 +582,7 @@ could not be matched.
 
 ## Index (cache)
 
-`cache/index.sqlite`, rebuilt by `mailstore reindex` from segment headers,
+`cache/index.sqlite`, rebuilt by `geniza reindex` from segment headers,
 segment bodies (for FTS), `incoming/`, `attachments/` and the journals.
 
 - `messages(id, location, segment, offset, frame_size, size, received, date,
@@ -558,14 +625,21 @@ Thread ids live only in the cache, so the algorithm can change later with a
 ## CLI (initial)
 
 ```
-mailstore sync [ACCOUNT…]      # sync, then evaluate incoming/
-mailstore search QUERY         # FTS5 query, prints ids + summaries
-mailstore show ID [--raw]      # reconstruct the original message byte-exactly
-mailstore export --mbox …      # full reconstruction to mbox
-mailstore reindex              # rebuild cache/ from store/
-mailstore verify               # re-hash messages and attachments
-mailstore stats --parts        # dry-run part classification on a mailbox
+geniza sync [ACCOUNT…]         # sync (all accounts by default), then evaluate incoming/
+geniza search QUERY            # FTS5 query, prints ids + summaries
+geniza show ID [--raw]         # reconstruct the original message byte-exactly
+geniza export --mbox …         # full reconstruction to mbox
+geniza reindex                 # rebuild cache/ from store/
+geniza verify                  # re-hash messages and attachments
+geniza stats --parts           # dry-run part classification on a mailbox
+geniza account rename OLD NEW
 ```
+
+Global options: `--config PATH`, and `--store NAME` for commands that act on
+one store (`search`, `show`, `export`, `reindex`, `verify`). It may be
+omitted when there is only one store or `default_store` is set. `sync`
+without arguments syncs every account of every store; with account names,
+only those (and only their stores are locked).
 
 `stats --parts` scans a mailbox (remote, or an existing Maildir/mbox) without
 storing anything and reports, per class, the number and size of parts, how
