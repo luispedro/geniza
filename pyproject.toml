@@ -44,7 +44,7 @@ default = { features = ["test", "lint"], solve-group = "default" }
 [tool.pixi.tasks]
 test = "pytest"
 lint = "ruff check src tests && ruff format --check src tests"
-fmt = "ruff check --fix src tests && ruff format src tests"
+fmt = "ruff format src tests && ruff check --fix src tests"
 typecheck = "mypy src"
 geniza = "python -m geniza"
 
