@@ -676,7 +676,12 @@ because of [message matching](#message-matching).
 
 ## Write ordering and crash safety
 
-One writer per store, enforced with `flock(store/.lock)`.
+One writer per store, enforced with `flock(store/.lock)`. The lock file
+stays empty and is never rewritten; the kernel releases the lock when its
+holder exits, so a crash leaves no stale lock. A second writer fails at
+once with "store is in use" rather than waiting. Taking the lock creates
+the store directory if it is missing, so a new store's `store.toml` is
+written under the lock, by exactly one process. Readers (`search`, `show`, `export`, `verify`) do not lock.
 
 1. Attachment files: temp + `fsync` + `rename`.
 2. Segment record (or `incoming/` file): append/write + `fsync`.
