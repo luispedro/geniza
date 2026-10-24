@@ -1,5 +1,10 @@
 # geniza
 
+**Goals**: This is intended as primarily a personal project, but it is
+open-source and, should you find it useful, you are welcome to use it and pull
+requests/feature suggestions are welcome (nowadays, a good feature suggestion
+is basically a pull request).
+
 A one-way mail archiver: it pulls mail from your server into a local store
 that is
 
