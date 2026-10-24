@@ -67,6 +67,7 @@ store/                                    # default: $XDG_DATA_HOME/geniza/<stor
 
 cache/                                    # default: $XDG_CACHE_HOME/geniza/<store>/
   CACHEDIR.TAG
+  store-id                                # id of the store the cache was built from
   index.sqlite
 ```
 
@@ -75,10 +76,30 @@ written**, not the message date. This is what makes them sealable: a month
 directory or segment never changes once that month is over. Message dates
 live in the index.
 
-`store.toml` holds a random store id (UUID) and the on-disk format version.
-The index records the id of the store it was built from; on a mismatch (a
-cache directory reused for a different or restored store) it is discarded
-and rebuilt.
+`store.toml` holds a random store id (UUID), the on-disk format version
+and the creation time:
+
+```toml
+# geniza store; written once, do not edit.
+format = 1
+id = "0b5c4f0e-6a43-4c55-9a0e-4c1f3d1e2a77"
+created = 2026-10-25T09:30:01Z
+```
+
+It is written once, through a temp file, by the first writer that takes
+the store lock, and never replaced. A format newer than geniza knows, or
+an unknown key, is an error. A store directory that has files other than
+`.lock` but no `store.toml` is refused rather than given a new id: it is
+either the wrong directory or a store that lost its `store.toml`.
+
+The cache records the id of the store it was built from in
+`cache/store-id`. On a mismatch or a missing id (a cache directory reused
+for a different or restored store), the files built from a store
+(`index.sqlite` and its `-wal`/`-shm`/`-journal` files) are removed and
+the index is rebuilt; nothing else in the directory is touched. The cache
+directory is created with mode 0700 and tagged with `CACHEDIR.TAG`. A
+non-empty directory without a `CACHEDIR.TAG` is refused rather than
+tagged, so a mistyped cache path cannot make backups skip it.
 
 ## Configuration
 
@@ -134,6 +155,15 @@ exclude = ["junk"]
   (`~/.local/share`, `~/.cache`) when the variables are unset.
 - Store settings (`[attachments]`, `[incoming]`) are merged key by key:
   built-in default ← top-level table ← `[stores.<name>.…]`.
+- Paths are absolute or start with `~/`. A store's path and cache must
+  not contain each other, nor overlap with another store's.
+- Sizes are integers (bytes) or strings with a binary unit: `"64KiB"`,
+  `"2MiB"`, `"1GiB"`. Durations are strings of number–unit pairs with
+  units `s`, `m`, `h`, `d`, `w`: `"7d"`, `"12h"`, `"1w2d"`.
+- Unknown keys are errors, so a misspelt key is not silently ignored.
+- A JMAP `url` must be `https`; plain `http` is accepted only for loopback
+  hosts (local test servers), so the token never crosses a network in
+  clear.
 - Secrets never appear in the file in plain text (see Secrets).
 - Until IMAP is implemented, an account with `type = "imap"` is rejected
   with an error saying so, rather than ignored.
