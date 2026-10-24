@@ -55,7 +55,7 @@ store/                                    # default: $XDG_DATA_HOME/geniza/<stor
   store.toml                              # store id and format version; written once
   .lock                                   # flock() target; single writer
   incoming/
-    <sha256>.eml                          # recent INBOX mail, raw, unmodified
+    <account>/<sha256>.eml                # recent INBOX mail, raw, unmodified
   segments/
     2026/2026-10.zst                      # sealed after its month ends or at 256 MiB
     2026/2026-10.1.zst                    # rollover within a month
@@ -148,8 +148,8 @@ exclude = ["junk"]
 ```
 
 - Store names and account names are unique within the configuration and are
-  used as directory names (`<store>`, `state/<account>/`), so they are
-  restricted to `[a-z0-9_-]`.
+  used as directory names (`<store>`, `state/<account>/`,
+  `incoming/<account>/`), so they are restricted to `[a-z0-9_-]`.
 - Paths default to `$XDG_DATA_HOME/geniza/<store>` and
   `$XDG_CACHE_HOME/geniza/<store>`, with the XDG fallbacks
   (`~/.local/share`, `~/.cache`) when the variables are unset.
@@ -167,9 +167,10 @@ exclude = ["junk"]
 - Secrets never appear in the file in plain text (see Secrets).
 - Until IMAP is implemented, an account with `type = "imap"` is rejected
   with an error saying so, rather than ignored.
-- Renaming an account would orphan its `state/<account>/` directory, so a
-  rename is an explicit `geniza account rename OLD NEW`, which moves the
-  directory and updates the configuration.
+- Renaming an account would orphan its `state/<account>/` and
+  `incoming/<account>/` directories, so a rename is an explicit
+  `geniza account rename OLD NEW`, which moves both directories and updates
+  the configuration.
 
 ## Secrets
 
@@ -544,8 +545,11 @@ spam that slipped through) or moved soon. Putting it straight into a segment
 would permanently archive things the user threw away within minutes, and
 would extract and store their attachments forever.
 
-Instead, such messages are held in `incoming/` as plain `<sha256>.eml` files —
-raw, uncompressed, attachments inline — until their fate is clear.
+Instead, such messages are held in `incoming/<account>/` as plain
+`<sha256>.eml` files — raw, uncompressed, attachments inline — until their
+fate is clear. Each account has its own `incoming/` directory, evaluated
+on its own, while segments and attachments stay shared by the store, so a
+message that several accounts archive is still stored once.
 
 Configuration:
 
@@ -561,36 +565,56 @@ max_drop_count = 200
 
 ### Placement at ingest
 
-A newly downloaded message goes to `incoming/` iff it is currently in one of
-the `incoming.mailboxes` **and** its received date is younger than `max_age`.
-Everything else goes directly to a segment. Hence, on a first sync of an old
-INBOX, only the last week lands in `incoming/`.
+A newly downloaded message goes to the account's `incoming/<account>/` iff
+it is currently in one of the `incoming.mailboxes` **and** its received date
+is younger than `max_age`. Everything else goes directly to a segment.
+Hence, on a first sync of an old INBOX, only the last week lands in
+`incoming/`.
 
-If the message's hash already exists in a segment, nothing is stored; only
-state events are written.
+If the message's hash already exists in a segment, or in this account's
+`incoming/`, nothing is stored; only state events are written. A message
+held only in *another* account's `incoming/` gets its own copy: sharing
+the file would tie one account's evaluation to the other's. The duplicate
+is short-lived, since whichever account promotes the message first writes
+the segment record and the others then promote it without writing (see
+below).
 
 ### Evaluation
 
-After every **complete** sync run of all accounts (a failed or partial run
-skips this step), each message in `incoming/` is evaluated. A *filed
-mailbox* is any synced mailbox that is not in `incoming.mailboxes` and does
-not have the Trash or Junk role (`\Trash`/`\Junk` special-use, JMAP roles
-`trash`/`junk`).
+Each account's `incoming/` is evaluated after every **complete** sync run
+of that account. A failed or partial run skips this step for that account
+only; other accounts are evaluated as usual. Everything below concerns the
+account being evaluated: its mailboxes, its journal, its runs. A *filed
+mailbox* is any of its synced mailboxes that is not in
+`incoming.mailboxes` and does not have the Trash or Junk role
+(`\Trash`/`\Junk` special-use, JMAP roles `trash`/`junk`).
 
+- **Already archived:** if the message is already in a segment (written by
+  another account, or by a promotion that a crash interrupted), it is
+  promoted without writing anything: journal `promote` with the location
+  of the existing record → unlink the `.eml`. This applies before the rules
+  below and to dropped messages too: once the bytes are in a segment, the
+  `.eml` is only a duplicate.
 - **Promote** if it is in a filed mailbox (the user filed it), or it is older
   than `max_age` and still in any synced mailbox (including Trash/Junk).
   Promotion = extract attachments → append segment record → `fsync` →
   journal `promote` → unlink the `.eml`.
-- **Drop** if it has been in no synced mailbox of any account at the end of
-  two consecutive complete runs. Journal `drop`. The `.eml` stays in
-  `incoming/` for `grace`, hidden from search by default, and is then
-  unlinked (journal `purge`).
+- **Drop** if it has been in none of the account's synced mailboxes at the
+  end of two consecutive complete runs of the account. Journal `drop`. The
+  `.eml` stays in `incoming/<account>/` for `grace`, hidden from search by
+  default, and is then unlinked (journal `purge`).
 - Otherwise, leave it.
 
 The two-run requirement covers the IMAP race where a message is moved from
 INBOX to a folder that was already synced earlier in the same run: it looks
 absent everywhere for one run, then reappears in its new folder on the next
 (see [Message matching](#message-matching), so not re-downloaded).
+
+Accounts do not consult each other. A message that both hold in
+`incoming/` may be dropped by one and promoted by the other; the archive
+keeps it. A message moved from one account to another by a client is
+dropped by the first and downloaded as a new message by the second
+(message matching is per account), so it is archived once.
 
 A dropped message that reappears in a synced mailbox during its grace period
 (restored on the server) is un-dropped (journal `undrop`) and evaluated
@@ -612,8 +636,9 @@ an undo buffer for it.
 
 The **mass-drop guard** covers the same failures acting all at once, plus
 servers that wrongly return an empty listing. If a run would drop more than
-`max_drop_fraction` of `incoming/` or more than `max_drop_count` messages, it
-drops nothing and reports why. `geniza sync --allow-mass-drop` overrides.
+`max_drop_fraction` of an account's `incoming/` or more than
+`max_drop_count` of its messages, it drops nothing for that account and
+reports why. `geniza sync --allow-mass-drop` overrides.
 
 ### Trash and Junk
 
@@ -628,15 +653,17 @@ it like INBOX mail; excluding Junk from sync (see Sync) skips it entirely.
 
 ### Properties
 
-- `incoming/` is bounded by roughly `max_age + grace` of INBOX mail: hundreds
-  to a few thousand files. That is the only place with per-message files and
-  the only place where files are deleted.
+- Each account's `incoming/` is bounded by roughly `max_age + grace` of its
+  INBOX mail: hundreds to a few thousand files. That is the only place with
+  per-message files and the only place where files are deleted.
 - It is backed up like the rest of `store/`. Its churn is small and bounded.
 - Messages that have reached a segment are never removed by sync (archive
   semantics). Deleting them later is the job of an explicit, future
   `compact` command.
 - Crash recovery: an `incoming/` file whose id already appears in a segment
-  is simply unlinked at startup.
+  is promoted without writing at the account's next evaluation (see
+  above). Until then it is a harmless duplicate; readers use the segment
+  record.
 
 ## State: the journal
 
@@ -667,9 +694,11 @@ sync batch. Each line is one event:
 - Every event assigns a value without looking at what was there before:
   `add`/`remove` set or clear the message at (`mbox`, `rid`); `flags` sets
   the flags of (`msg`, `mbox`); `reset` voids every `rid` and flag set of
-  its mailbox; `promote`/`drop`/`purge` set a message's fate in
-  `incoming/` and `undrop` clears it. Replaying events that were already
-  applied (twice, or re-derived after a crash) changes nothing.
+  its mailbox; `promote`/`drop`/`purge` set a message's fate in the
+  account's `incoming/` and `undrop` clears it. Replaying events that were
+  already applied (twice, or re-derived after a crash) changes nothing.
+- Fates are per account, like `incoming/`: a message can be dropped from
+  one account's `incoming/` and still held in another's.
 - Flags belong to a message in a mailbox, so identical copies in one
   mailbox share one set. They are not cleared when the message leaves the
   mailbox (that would make the result depend on event order); readers
@@ -841,7 +870,10 @@ segment bodies (for FTS), `incoming/`, `attachments/` and the journals.
 
 - `messages(id, location, segment, offset, frame_size, size, received, date,
   from, to, cc, subject, message_id, in_reply_to, thread_id, state)` —
-  `location` ∈ {segment, incoming}; `state` ∈ {live, dropped}.
+  `location` ∈ {segment, incoming} (segment if any record holds it);
+  `state` ∈ {live, dropped}, dropped only if it is in no segment and every
+  account holding it in `incoming/` has dropped it.
+- `incoming(account, msg, state)` — one row per `incoming/<account>/` file.
 - `membership(account, mbox, msg, rid)`, `flags(account, msg, flag)`.
 - `mailboxes(account, mbox, name, role)`.
 - `attachments(blob, file, kind, mime_type, size)`,
@@ -879,7 +911,7 @@ Thread ids live only in the cache, so the algorithm can change later with a
 ## CLI (initial)
 
 ```
-geniza sync [ACCOUNT…]         # sync (all accounts by default), then evaluate incoming/
+geniza sync [ACCOUNT…]         # sync (all accounts by default); each then evaluates its incoming/
 geniza search QUERY            # FTS5 query, prints ids + summaries
 geniza show ID [--raw]         # reconstruct the original message byte-exactly
 geniza export --mbox …         # full reconstruction to mbox
@@ -918,12 +950,6 @@ repeat. It is meant to be written early, to set the defaults from real mail.
   parsing), the only other planned dependency.
 
 ## Open questions
-
-- `promote`, `drop`, `undrop` and `purge` concern `incoming/`, which is
-  per store, but journals are per account. Which journal gets them
-  (the account that downloaded the message, every account that has it,
-  or a store-level journal) is not decided yet; `journal.py` takes the
-  account as a parameter and does not care.
 
 - Defaults for `max_age` and the mass-drop guard are guesses. `stats
   --parts` cannot inform them: a Maildir has no server receive dates or

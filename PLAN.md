@@ -215,8 +215,10 @@ search results as the incrementally maintained index.
 
 **Done when:** every scenario in the evaluation section of DESIGN.md has a
 test, including the IMAP move race (scripted in the fake source, since the
-two-run rule applies to every source) and an empty listing tripping the
-guard.
+two-run rule applies to every source), an empty listing tripping the
+guard, a message held in two accounts' `incoming/` (one drops it, the other
+promotes it; a later promotion writes nothing), and a promotion interrupted
+after the segment write.
 
 ### M8 — JMAP sync
 
