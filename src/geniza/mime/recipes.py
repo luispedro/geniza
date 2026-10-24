@@ -8,8 +8,10 @@ re-encoding: a part can be stubbed only if the round trip is byte-exact.
 
 import base64
 import binascii
+from collections import Counter
 from dataclasses import dataclass
 from enum import StrEnum
+from itertools import groupby
 from typing import Literal
 
 from geniza.mime.classify import Classified, PartClass
@@ -21,12 +23,23 @@ EOL_BYTES: dict[Eol, bytes] = {"crlf": b"\r\n", "lf": b"\n"}
 
 KiB = 1024
 
+#: A layout may have this many runs, plus one per LAYOUT_LINES_PER_RUN lines.
+LAYOUT_BASE_RUNS = 8
+LAYOUT_LINES_PER_RUN = 16
+
+
+type Layout = tuple[tuple[int, int], ...]
+
 
 @dataclass(frozen=True)
 class Base64Recipe:
+    #: Line length; with a layout, the most common one (informational).
     line: int
     eol: Eol
     final_eol: bool
+    #: Every line's length as (length, count) runs, when the lines are not
+    #: all ``line`` long; blank lines are runs of length 0.
+    layout: Layout = ()
 
 
 @dataclass(frozen=True)
@@ -94,10 +107,34 @@ def _eol_style(body: bytes) -> tuple[Eol | None, bool]:
 
 def encode_base64(content: bytes, recipe: Base64Recipe) -> bytes:
     encoded = base64.b64encode(content)
-    step = recipe.line
     eol = EOL_BYTES[recipe.eol]
-    lines = [encoded[i : i + step] for i in range(0, len(encoded), step)]
+    if recipe.layout:
+        lines, i = [], 0
+        for length, count in recipe.layout:
+            for _ in range(count):
+                lines.append(encoded[i : i + length])
+                i += length
+    else:
+        step = recipe.line
+        lines = [encoded[i : i + step] for i in range(0, len(encoded), step)]
     return eol.join(lines) + (eol if recipe.final_eol and lines else b"")
+
+
+def _base64_recipe(lines: list[bytes], eol: Eol, final: bool) -> Base64Recipe | None:
+    """The recipe for base64 text cut into ``lines``: a fixed line length if
+    every line but a shorter last one has it, else an explicit layout if it
+    is small enough to be worth storing."""
+    if not lines or not lines[0]:
+        line = 0
+    else:
+        line = len(lines[0])
+        if all(len(x) == line for x in lines[:-1]) and 0 < len(lines[-1]) <= line:
+            return Base64Recipe(line, eol, final)
+    layout = tuple((k, len(list(g))) for k, g in groupby(len(x) for x in lines))
+    if len(layout) > LAYOUT_BASE_RUNS + len(lines) // LAYOUT_LINES_PER_RUN:
+        return None
+    line = Counter(len(x) for x in lines if x).most_common(1)[0][0]
+    return Base64Recipe(line, eol, final, layout)
 
 
 def _decode_base64(body: bytes) -> Decoded:
@@ -111,10 +148,10 @@ def _decode_base64(body: bytes) -> Decoded:
         except binascii.Error:
             pass
         else:
-            if lines and lines[0]:
-                recipe = Base64Recipe(len(lines[0]), eol, final)
-                if encode_base64(content, recipe) == body:
-                    return Decoded(content, recipe)
+            recipe = _base64_recipe(lines, eol, final) if content else None
+            if recipe is not None and encode_base64(content, recipe) == body:
+                reason = "base64 line layout" if recipe.layout else None
+                return Decoded(content, recipe, reason)
             return Decoded(content, None, "base64 does not round-trip")
     try:
         return Decoded(binascii.a2b_base64(body), None, "irregular base64")

@@ -24,6 +24,13 @@ EXPECTED: dict[str, list[tuple[str, str, str]]] = {
     "base64_72_lf": [("1", B, INLINE), ("2", A, STUB)],
     "base64_76_crlf": [("1", B, INLINE), ("2", A, STUB)],
     "base64_irregular": [("1", B, INLINE), ("2", A, COPY), ("3", A, COPY)],
+    "base64_layouts": [
+        ("1", B, INLINE),
+        ("2", A, STUB),
+        ("3", A, STUB),
+        ("4", A, STUB),
+        ("5", A, STUB),
+    ],
     "binary_8bit_attachment": [("1", B, INLINE), ("2", A, STUB)],
     "calendar_alternative": [
         ("1.1", B, INLINE),

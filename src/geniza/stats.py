@@ -291,6 +291,8 @@ class Totals:
             cs.modes["stubbable" if p.stubbable else "never stubbable"] += 1
             if p.reason:
                 cs.reasons[p.reason] += 1
+                if not p.stubbable:
+                    self.example(f"decoration never stubbable: {p.reason}", msg)
             if p.has_filename:
                 self.decorations_with_filename += 1
             if p.stubbable and p.digest is not None:

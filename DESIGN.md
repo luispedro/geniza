@@ -278,6 +278,8 @@ never changes earlier bytes, and any record can be read by offset alone.
       "file": "attachments/2026/10/3fa9c1e07b22d4a1_quarterly-report.pdf",
       "enc": "base64",           // "base64" | "identity"
       "line": 76,                // base64 only: line length
+      // "layout": [[72, 217], [60, 1], [12, 1], [72, 33], [28, 1]],
+      //                         // base64 only, if lines are irregular
       "eol": "crlf",             // line endings of the encoded form
       "final_eol": true
     }
@@ -407,8 +409,17 @@ message).
 
 Recipes:
 
-- `base64`: line length, EOL style, final EOL. Irregular line lengths fail
-  the round trip and fall back to copy.
+- `base64`: line length, EOL style, final EOL. The canonical base64 text
+  is cut into lines of `line` characters, the last one possibly shorter.
+  When the lines are not like that, the record also has a `layout`: every
+  line's length as `[length, count]` runs, blank lines being runs of
+  length 0; `line` then holds the most common length, for information
+  only. The layout may have at most 8 runs plus one per 16 lines;
+  anything more irregular (or any whitespace or padding inside the text)
+  falls back to copy. Layouts seen in real mail: one line split in two
+  (Outlook for Mac), content encoded in chunks that each end in a short
+  line, a blank line between chunks (Roundcube), and blank lines before
+  or after the text (several webmail clients).
 - `identity` (`7bit`, `8bit`, `binary`): the body is the content. For
   `text/*` parts with consistent CRLF line endings, the file is written
   with LF (`eol: "crlf"` records the conversion), so a `.py` or `.patch`
@@ -797,10 +808,11 @@ repeat. It is meant to be written early, to set the defaults from real mail.
 - Defaults for `max_age` and the mass-drop guard are guesses. `stats
   --parts` cannot inform them: a Maildir has no server receive dates or
   deletion history.
-- In the measured mailbox, about 1.4% of base64 attachments (584 of 42k)
-  and 493 decorations did not round-trip and fell back to copy (or stayed
-  inline). The cause has not been looked at yet; it may be a recipe that
-  is too strict.
+- In the measured mailbox, about 1.4% of base64 attachments (600 of 43k)
+  and 475 decorations did not round-trip with a fixed line length. Every
+  sampled case was an irregular but clean line layout, now handled by
+  `layout` (see "Recipes"). Whether the run cap fits the rest of them
+  still needs to be checked with `stats --parts`.
 
 ## Not planned (for now)
 

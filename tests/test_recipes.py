@@ -1,9 +1,13 @@
+import base64
 from email.message import EmailMessage
+from itertools import groupby
 
 from hypothesis import given
 from hypothesis import strategies as st
 
 from geniza.mime.recipes import (
+    LAYOUT_BASE_RUNS,
+    LAYOUT_LINES_PER_RUN,
     Base64Recipe,
     IdentityRecipe,
     decode,
@@ -36,6 +40,37 @@ def test_base64_round_trip(content: bytes, recipe: Base64Recipe) -> None:
     assert decoded.content == content
     assert decoded.recipe is not None
     assert encode(content, decoded.recipe) == body
+
+
+@st.composite
+def base64_layouts(draw: st.DrawFn, content: bytes) -> list[bytes]:
+    """Base64 text for ``content`` cut into lines of a usual length, with
+    some lines of arbitrary length and blank lines anywhere."""
+    encoded, lines = base64.b64encode(content), []
+    usual = draw(st.integers(1, 120))
+    lengths = st.one_of(st.just(usual), st.integers(0, 120))
+    while encoded:
+        n = draw(lengths)
+        lines.append(encoded[:n])
+        encoded = encoded[n:]
+    return lines + draw(st.lists(st.just(b""), max_size=3))
+
+
+@given(st.binary(min_size=1, max_size=3000), st.data())
+def test_base64_layout_round_trip(content: bytes, data: st.DataObject) -> None:
+    """Any cut of the base64 text into lines is either reproduced exactly or,
+    if its layout is too irregular to be worth storing, copied."""
+    lines = data.draw(base64_layouts(content))
+    eol = data.draw(st.sampled_from([b"\r\n", b"\n"]))
+    body = eol.join(lines) + data.draw(st.sampled_from([b"", eol]))
+    decoded = decode(body, leaf(body, "base64"))
+    assert decoded.content == content
+    if decoded.recipe is None:
+        # A trailing blank line may be read as the final EOL instead.
+        runs = len(list(groupby(len(x) for x in lines)))
+        assert runs > LAYOUT_BASE_RUNS + (len(lines) - 1) // LAYOUT_LINES_PER_RUN
+    else:
+        assert encode(content, decoded.recipe) == body
 
 
 @given(st.binary(min_size=1, max_size=3000), base64_recipes, st.data())

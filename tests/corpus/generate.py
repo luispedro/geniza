@@ -486,6 +486,51 @@ def base64_irregular() -> bytes:
     )
 
 
+@case("base64_layouts")
+def base64_layouts() -> bytes:
+    """Base64 line layouts seen from real clients, all stubbable with an
+    explicit layout: one line split in two (Outlook for Mac), content
+    encoded in chunks that each end in a short line, a blank line between
+    chunks (Roundcube), and blank lines before and after (webmail)."""
+    lines = b64(pdf(31, 4000), line=72, eol="\n", final_eol=False).split("\n")
+    lines[20:21] = [lines[20][:60], lines[20][60:]]
+    split = "\n".join(lines) + "\n"
+    data = blob(32, 6000)
+    chunked = "".join(
+        b64(data[i : i + 1500], line=60, eol="\n") for i in range(0, 6000, 1500)
+    )
+    lines = b64(pdf(33, 8000), line=76, eol="\n", final_eol=False).split("\n")
+    for i in range(len(lines) // 30 * 30, 0, -30):
+        lines.insert(i, "")
+    spaced = "\n".join(lines) + "\n"
+    padded = "\n" + b64(jpeg(34, 3000), eol="\n") + "\n\n"
+    return crlf(
+        headers("base64 layouts", mid(40))
+        + 'Content-Type: multipart/mixed; boundary="blay"\n\n'
+        + "--blay\n"
+        + "Content-Type: text/plain\n\n"
+        + "Base64 with unusual line layouts.\n"
+        + "--blay\n"
+        + 'Content-Type: application/pdf; name="split.pdf"\n'
+        + "Content-Transfer-Encoding: base64\n\n"
+        + split
+        + "--blay\n"
+        + 'Content-Type: application/octet-stream; name="chunked.bin"\n'
+        + "Content-Transfer-Encoding: base64\n\n"
+        + chunked
+        + "--blay\n"
+        + 'Content-Type: application/pdf; name="blank-lines.pdf"\n'
+        + "Content-Transfer-Encoding: base64\n\n"
+        + spaced
+        + "--blay\n"
+        + 'Content-Type: image/jpeg; name="padded.jpg"\n'
+        + "Content-Disposition: attachment\n"
+        + "Content-Transfer-Encoding: base64\n\n"
+        + padded
+        + "--blay--\n"
+    )
+
+
 @case("forwarded_rfc822")
 def forwarded_rfc822() -> bytes:
     """A forwarded message carrying the same PDF as outlook_related."""
