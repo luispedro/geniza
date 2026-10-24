@@ -255,6 +255,12 @@ downloaded (CRLF or LF); only the `From ` line and separator use `\n`.
 
 Each body frame is compressed on its own (no shared dictionary), so appending
 never changes earlier bytes, and any record can be read by offset alone.
+Body frames carry zstd's content checksum, so damage is caught on read.
+
+The date in the `From ` line is the received date in UTC, in `asctime`
+form (`From geniza Fri Oct 23 14:02:11 2026`). mbox has no length field,
+so a message that does not end with a newline gains one when read as mbox;
+geniza itself reads exactly `stripped_size` bytes and loses nothing.
 
 ### Record header
 
@@ -294,7 +300,10 @@ index can be rebuilt from headers alone (bodies are needed only for FTS).
 ### Segment size
 
 Segments are sealed at the end of their month or when they reach 256 MiB,
-whichever comes first. The cap is not driven by borg: when the open segment
+whichever comes first. The month is the UTC month of the `stored` time. A
+record that would take the open segment past 256 MiB starts the next
+rollover segment instead (`2026-10.1.zst`, `2026-10.2.zst`, …), unless the
+segment is empty, so a single larger message still fits. The cap is not driven by borg: when the open segment
 grows, borg re-reads it (sub-second for 256 MiB on local disk) but only
 stores the new chunks at its end. Removing a record during a future
 `compact` shifts the bytes after it, and borg's content-defined chunking
@@ -630,8 +639,14 @@ One writer per store, enforced with `flock(store/.lock)`.
 
 A crash at any point leaves at worst orphaned attachments (picked up by
 `verify`/`compact`) or a torn record at the end of the open segment.
-At startup the open segment is scanned from its last indexed offset and
-truncated after the last complete record.
+When the writer opens a segment, it removes a torn record at its end: the
+records' headers are walked (without decompressing bodies) and the last
+record is checked in full (complete, decompresses, checksum and
+`stripped_size` match). A record that runs past the end of the file, a
+last record that fails the check, or a zero-filled tail is truncated, with
+a warning. Since one record is in flight at a time and each is fsynced,
+damage anywhere else cannot come from a crash: it is reported and the file
+is left alone.
 
 ## Sync
 
