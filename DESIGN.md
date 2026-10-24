@@ -312,13 +312,21 @@ before bodies anyway.
 
 Every leaf MIME part falls into exactly one class, checked in this order:
 
-1. **Body** — the text parts that form the message text: the top-level
-   `text/plain`/`text/html`, or the members of the top-level
-   `multipart/alternative` (looking through `multipart/mixed` and
-   `multipart/signed` wrappers). Never extracted.
+1. **Body** — the text parts that form the message text: `text/plain` and
+   `text/html` parts without a filename or `Content-Disposition:
+   attachment`, reached from the top of the message through
+   `multipart/mixed` and `multipart/alternative` (all members),
+   `multipart/signed` (the signed content), `multipart/report` (its
+   human-readable first part) and `multipart/related` (its root part, so
+   the HTML of `alternative { plain, related { html, images } }` is body).
+   Unknown multipart subtypes count as `multipart/mixed` (RFC 2046).
+   Never extracted.
 2. **Crypto** — `application/pgp-signature`, `application/pkcs7-signature`,
    `application/x-pkcs7-signature`, `application/pgp-encrypted`,
-   `application/pgp-keys`. Never extracted.
+   `application/pgp-keys`, `application/pkcs7-mime`,
+   `application/x-pkcs7-mime`, and every part of a `multipart/encrypted`
+   (the PGP/MIME ciphertext part is usually `encrypted.asc`, but it is not
+   an attachment). Never extracted.
 3. **Decoration** — a part with a `Content-ID` inside `multipart/related`
    (images referenced from HTML via `cid:`), or an inline `image/*` part
    without a filename. Logos, signature images, pasted screenshots.
@@ -356,13 +364,19 @@ inferred. Then:
 - **stub** (preferred): re-encode the decoded bytes with the recipe. If the
   result is byte-identical to the original part body, replace the body
   (headers untouched) with a stub such as
-  `[geniza: stored as attachments/2026/10/3fa9…_quarterly-report.pdf]`
-  plus the part's EOL. The file is now needed to reconstruct the message.
+  `[geniza: stored as attachments/2026/10/3fa9…_quarterly-report.pdf]`,
+  followed by the part's EOL if the original body ended with one. The file is now needed to reconstruct the message.
 - **copy** (fallback, attachments only): if re-encoding does not reproduce
   the original exactly, the file is still written, but the message keeps
   the original encoded part. This costs duplicate bytes but guarantees that
   every true attachment exists as a real file, while the message stays
   self-contained. Decorations that cannot be stubbed simply stay inline.
+
+A part's body ends before the line ending that precedes the next boundary
+delimiter: per RFC 2046 that line ending belongs to the delimiter. So
+`final_eol` is true only when the encoded body has a line ending of its own
+before it (a blank line before the boundary, or the end of a single-part
+message).
 
 Recipes:
 
@@ -373,7 +387,11 @@ Recipes:
   with LF (`eol: "crlf"` records the conversion), so a `.py` or `.patch`
   file is usable directly. Mixed line endings fail the round trip.
 - `quoted-printable`: soft line breaks cannot be reproduced reliably, so QP
-  parts are always copy mode. This covers many small text attachments.
+  parts are always copy mode. This covers many small text attachments; for
+  `text/*` parts whose decoded content uses CRLF consistently, the file is
+  written with LF, as for `identity`.
+- Any other `Content-Transfer-Encoding` (`x-uuencode`, …) is not decoded,
+  and the part stays inline whatever its class.
 
 After stripping, the full message is reconstructed from the stripped bytes
 plus blobs and hashed; the record is only committed if the hash equals `id`.
@@ -401,8 +419,11 @@ is not planned.
 
 - `YYYY/MM` is the month the blob was first written.
 - `<name>` is the decoded filename (RFC 2231/2047), NFC-normalised, with `/`,
-  NUL, control characters and leading dots removed, truncated to 120 bytes
-  (preserving the extension). Fallback: `part-<path>.<ext from MIME type>`.
+  NUL, control characters, bidirectional controls (U+202E can make
+  `…fdp.exe` display as `…exe.pdf`), leading dots and surrounding
+  whitespace removed, truncated to 120 bytes of UTF-8 (preserving an
+  extension of up to 16 bytes). Fallback: `part-<path>.<ext from MIME
+  type>`, with `.bin` when the type has no known extension.
 - The first name seen wins; other names are recorded in the index.
 - Files are written via temp file + `fsync` + `rename`, then made read-only.
 - The hash prefix lets `reindex` map files to blobs without re-hashing;

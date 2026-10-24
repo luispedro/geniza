@@ -654,6 +654,12 @@ def filenames_hostile() -> bytes:
             'Content-Disposition: attachment; filename="C:\\\\Users\\\\me\\\\win.doc"\n',
             167,
         )
+        # U+202E RIGHT-TO-LEFT OVERRIDE: displays as "invoiceexe.pdf"
+        + attachment_part(
+            "Content-Type: application/pdf\n"
+            "Content-Disposition: attachment; filename*=UTF-8''invoice%E2%80%AEfdp.exe\n",
+            168,
+        )
         + "--fnames--\n"
     )
 
