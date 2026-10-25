@@ -410,8 +410,8 @@ Every leaf MIME part falls into exactly one class, checked in this order:
    screenshots. This rule comes before the next one because Outlook gives
    decorations filenames (`image001.png`). Non-image parts with a
    `Content-ID` (a PDF shown inline, `application/octet-stream`, Outlook's
-   `.wmz` drawings) go on to the next rules: in real mail some of them are
-   attachments, and there are few enough that extracting them all costs
+   `.wmz` drawings) go on to the next rules: some of them are
+   attachments, and they are rare enough that extracting them all costs
    little.
 4. **Attachment** — any other part with a filename (`Content-Disposition`
    `filename` or `Content-Type` `name`) or with `Content-Disposition:
@@ -437,28 +437,16 @@ Attachments are what the sender meant to send, so they are extracted
 regardless of size: small `.py`, `.patch`, `.md` files are valuable on disk
 as-is. Decorations are extracted only when large.
 
-The default comes from `geniza stats --parts` on a personal Maildir
-(331k unique messages, 52.5 GB; 42k attachments, 26 GB decoded; 63k
-decorations, 6.3 GB decoded, but only 13k distinct blobs). File counts
-and bytes count each distinct blob once; inline bytes are what stays in
-message records, before compression:
-
-| `decoration_min_size` | files  | decoration files | file bytes | inline bytes |
-|-----------------------|--------|------------------|------------|--------------|
-| 16 KiB                | 41,968 | 7,861            | 24.18 GB   | 9.68 GB      |
-| 64 KiB                | 38,748 | 4,465            | 24.06 GB   | 10.30 GB     |
-| 128 KiB               | 37,388 | 3,030            | 23.94 GB   | 11.09 GB     |
-| 256 KiB               | 36,215 | 1,790            | 23.72 GB   | 11.99 GB     |
-| 1 MiB                 | 34,946 | 449              | 23.06 GB   | 14.94 GB     |
-
-Lowering the threshold saves much more inline than it adds in files,
-because a pasted image is re-sent with every reply in a thread and is
-stored once as a file. Net saving per extra file: about 1.8 MB from 1 MiB
-to 256 KiB, 530 KB from 256 KiB to 64 KiB, and 150 KB from 64 KiB to
-16 KiB, where the extra files are mostly signature logos. 64 KiB is the
-knee: below it, each extra file saves little, and at 16 KiB decorations
-would make up a fifth of `attachments/`. zstd recovers part of the base64
-overhead of inline images, so the real differences are somewhat smaller.
+The default was chosen by running `geniza stats --parts` on a large
+mailbox and comparing the file count and the bytes left inline at
+several thresholds (16 KiB to 1 MiB). Lowering the threshold saves much
+more inline than it adds in files, because a pasted image is re-sent with
+every reply in a thread and is stored once as a file. The saving per
+extra file falls as the threshold drops; 64 KiB is the knee: below it the
+extra files are mostly signature logos, each saving little, and
+decorations would become a large share of `attachments/`. zstd recovers
+part of the base64 overhead of inline images, so the real differences are
+somewhat smaller.
 
 ### Extraction modes
 
@@ -491,8 +479,8 @@ Recipes:
   length 0; `line` then holds the most common length, for information
   only. The layout may have at most 8 runs plus one per KiB of base64
   text (about 1% of the body); anything more irregular (or any whitespace
-  or padding inside the text) falls back to copy. Layouts seen in real
-  mail: one line split in two (Outlook for Mac), content encoded in
+  or padding inside the text) falls back to copy. Layouts that clients
+  produce: one line split in two (Outlook for Mac), content encoded in
   chunks that each end in a short line, a blank line between chunks
   (Roundcube; Coremail with 8 KiB chunks of 2047-character lines), and
   blank lines before or after the text (several webmail clients). A
@@ -512,8 +500,7 @@ Recipes:
   file is the body as is, which is what copy mode would write too, so
   copy would only keep a second copy of the same bytes in the message.
   Writing such a file with LF would need a record of which lines had
-  CRLF, a format change not worth making: no such part occurred among the
-  42k attachments in the measured mailbox.
+  CRLF, a format change not worth making for parts this rare.
 - `quoted-printable`: soft line breaks cannot be reproduced reliably, so QP
   parts are always copy mode. This covers many small text attachments; for
   `text/*` parts whose decoded content uses CRLF consistently, the file is
@@ -881,7 +868,9 @@ In order of preference, decided per account from the server's capabilities:
    altered by attachment stripping). `Received:` lines carry per-hop queue
    ids and timestamps, so distinct messages with identical header blocks do
    not occur in practice. Messages without a Message-ID are never matched
-   and are always downloaded.
+   and are always downloaded. (Distinct messages share Message-IDs
+   often enough, and some messages have none, that a Message-ID alone is
+   no match key.)
 
 With 1–3 the id is recorded as `eid` in the journal, and an `eid` seen
 before maps straight to its stored message with no further fetch.
@@ -1043,12 +1032,11 @@ repeat. It is meant to be written early, to set the defaults from real mail.
 - Defaults for `max_age` and the mass-drop guard are guesses. `stats
   --parts` cannot inform them: a Maildir has no server receive dates or
   deletion history.
-- In the measured mailbox, about 1.4% of base64 attachments (600 of 43k)
-  and 475 decorations did not round-trip with a fixed line length. With
-  `layout` and `pad_bits` (see "Recipes"), 6 attachments in 2 messages
-  (about 3 MB) still go to copy. Both have periodic layouts (a blank line
-  after every line; lines alternating 64 and 8 characters), which runs
-  cannot express. Left as copy unless more mail shows the same pattern.
+- A small share of base64 parts does not round-trip with a fixed line
+  length. With `layout` and `pad_bits` (see "Recipes") nearly all of them
+  stub; the rest have periodic layouts (a blank line after every line;
+  lines alternating 64 and 8 characters), which runs cannot express.
+  They stay copy unless the pattern turns out to be common.
 
 ## Not planned (for now)
 

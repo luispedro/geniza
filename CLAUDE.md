@@ -5,9 +5,12 @@ is borg-friendly, searchable, made of few large files, and keeps attachments
 as real files.
 
 - `DESIGN.md` is the specification: on-disk formats, sync, matching, config.
-- `PLAN.md` is the milestone plan (M0–M10). Work milestone by milestone and
-  stop at the gate after M3 (`geniza stats --parts` on real mail). The first
-  release is JMAP only (Fastmail as reference): M9 (IMAP) comes after it.
+- `PLAN.md` is the milestone plan (M0–M10) and its "Status" section says
+  where things stand; keep it current. Work milestone by milestone. The
+  first release is JMAP only (Fastmail as reference): M9 (IMAP) comes
+  after it.
+- `geniza debug import-local` is a testing tool and stays under `debug`;
+  don't promote it to a top-level command (stores are filled by sync).
 
 When behaviour or a format changes, update `DESIGN.md` in the same commit.
 If the design turns out to be wrong or ambiguous, raise it rather than
@@ -71,6 +74,29 @@ silently diverging.
   keys. Never run `ssh-add -D` or `-d` against an inherited `SSH_AUTH_SOCK`.
 - `tests/fixtures/sshcrypt/` holds throwaway keys and ciphertexts made with
   the original `sshcrypt.py`; never regenerate them with real keys.
+- The corpus is written by `tests/corpus/generate.py`; after editing it,
+  run `pixi run python tests/corpus/generate.py` (a test checks the files
+  are up to date). Each corpus file needs an entry in `EXPECTED` in
+  `tests/test_classify.py`, and new cases change the counts asserted in
+  `tests/test_stats.py`. Addresses in From/To/Cc use example.org,
+  example.net or example.com (checked by a test).
+- Tests that write raw bytes to stdout need `capsysbinary` (bytes under
+  `capsys` break capture for the rest of the session). The `geniza` logger
+  does not propagate, so check stderr, not `caplog`.
+
+## Development notes
+
+- The store writers (`SegmentWriter`, `AttachmentWriter`, `JournalWriter`)
+  do not lock; their callers hold a `StoreLock`, and create `store.toml`
+  under it.
+- Iterate `mailbox.mbox` with `iterkeys()`: plain iteration yields
+  messages, so ruff's SIM118 "fix" breaks the code.
+- Invisible characters (bidi controls, combining marks) written as
+  `\u…` escapes have ended up as literal characters in source files.
+  Prefer `chr()` with code points, and check with
+  `grep -rnP '[\x{200e}\x{200f}\x{202a}-\x{202e}\x{2066}-\x{2069}\x{0301}]' src tests`.
+- If `import geniza` fails in the pixi environment, run
+  `pixi reinstall geniza` (the editable install).
 
 ## Security and privacy
 
@@ -79,3 +105,10 @@ silently diverging.
   them in exceptions, or write them to the store or cache.
 - Logs and `--json` output may contain addresses and subjects at `-v`;
   default output should be summaries.
+- When running anything on the developer's real mail, print only counts
+  and structure (sizes, line lengths, part types), never headers, names
+  or content, and keep the outputs out of git.
+- Nothing from the developer's mail goes into tracked files or commit
+  messages, not even in passing: no message or attachment counts, mailbox
+  sizes, mail paths or folder names, dates or senders. Record conclusions
+  and the reasoning behind a default, not the figures.

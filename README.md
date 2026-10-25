@@ -20,11 +20,12 @@ that is
 
 geniza never modifies the server: it only reads.
 
-> **Status: under development, not yet usable for archiving.** The storage
-> primitives (segments, attachment files, journal) are done; sync, search
-> and the rest of the CLI are not. The only working command is
-> `geniza stats --parts`. The first release will support JMAP, with
-> Fastmail as the reference server; IMAP comes after it.
+> **Status: under development, not yet usable for archiving.** The store
+> works: messages can be ingested (for now only from local files, for
+> testing), shown, exported and verified. Sync and search do not exist
+> yet. The first release will support JMAP, with Fastmail as the
+> reference server; IMAP comes after it. See [`PLAN.md`](PLAN.md) for
+> where things stand.
 
 ## How it works
 
@@ -72,6 +73,12 @@ pixi run geniza stats --parts ~/Maildir
 ```
 
 Its output identifies no messages unless `--examples` is given.
+
+To try the store itself, point a configuration (see "Configuration" in
+`DESIGN.md`) at a scratch store and fill it with
+`geniza debug import-local ~/Maildir`; then `show ID`, `export --mbox` and
+`verify` work on it. `import-local` is for development only: it records no
+mailboxes or flags, and a store meant for real use is filled by sync.
 
 ## Development
 

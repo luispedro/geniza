@@ -7,6 +7,15 @@ in something that can be run and tested on its own. Milestones 1–3 need no
 network and write nothing, and produce the numbers that set the defaults the
 design leaves open.
 
+## Status
+
+- **M0–M4 done.** The M3 gate (`stats --parts` on real mail) is passed;
+  the defaults and classification changes it led to are in DESIGN.md.
+- **M5 done except fault injection.** Ingest, `debug import-local`,
+  `show`, `export --mbox` and `verify` work, and the "done when" run on
+  real mail passed (see M5).
+- Next: M5 fault injection, then M6.
+
 ## Tooling
 
 - **Python 3.15 only** (`requires-python = ">=3.15"`). No compatibility shims
@@ -145,8 +154,7 @@ part reported as stub reconstructs byte-exactly.
 
 ### M3 — `geniza stats --parts` (first real output)
 
-- Reads a local **Maildir or mbox** with the stdlib `mailbox` module. The
-  existing offlineimap Maildir is the first target.
+- Reads a local **Maildir or mbox** with the stdlib `mailbox` module.
 - Reports per class: count, total size, size histogram; stub vs. copy vs.
   inline; resulting file count and inline bytes at `decoration_min_size` of
   16K, 64K, 128K, 256K and 1M; how often identical decorations repeat;
@@ -154,8 +162,8 @@ part reported as stub reconstructs byte-exactly.
 - Prints nothing that identifies messages unless `--examples` is given, so
   the output can be pasted into an issue or a design discussion.
 
-**Done when:** it runs over the full offlineimap Maildir. Then run it,
-choose the defaults, and update DESIGN.md with the numbers behind them.
+**Done when:** it runs over a large real Maildir. Then run it,
+choose the defaults, and record the reasoning in DESIGN.md.
 
 ### M4 — Storage primitives
 
@@ -195,14 +203,24 @@ Tests:
   ordering, followed by startup recovery, must leave a store that passes
   `verify`.
 
-**Done when:** importing the offlineimap Maildir into a scratch store,
+**Done when:** importing a large real Maildir into a scratch store,
 then running `export --mbox`, reproduces every message byte for byte (hashes
 compared), and `verify` passes.
+
+**Result (2026-10-25):** passed. The import had no fallbacks or read
+errors, a second import stored nothing new, `verify` found no problems,
+and `export --mbox` completed.
 
 ### M6 — Index and search
 
 - Schema from DESIGN.md, `reindex` (headers-only pass, then FTS pass),
   incremental updates from ingest and journal.
+- Replaces the stand-ins that scan every segment header: `ingest.Catalog`
+  (known message ids and blob files) and the id lookup in `show`. The
+  index goes in `cache/index.sqlite`, which `config.open_cache` already
+  removes on a store id mismatch.
+- `show` gains the message text once search decodes bodies (charset,
+  QP/base64, HTML to text); until then it prints headers and parts only.
 - `geniza search` over FTS5, with a small query syntax for
   `from:`/`to:`/`subject:`/`mailbox:`/`date:` mapped onto columns.
 - Union-find threading; tests for out-of-order replies and thread merges.
@@ -219,6 +237,9 @@ search results as the incrementally maintained index.
 - Driven by journal state, not by any server, so it is tested against a
   **fake source**: a scripted sequence of mailbox snapshots (arrive, move,
   trash, expunge, restore, empty listing).
+- `Ingester.add` writes no journal events; its caller writes them per
+  batch, with a `flags` event for every `add`. `verify` learns to check
+  `incoming/`.
 
 **Done when:** every scenario in the evaluation section of DESIGN.md has a
 test, including the IMAP move race (scripted in the fake source, since the
@@ -286,6 +307,9 @@ and a message moved between folders is matched without re-downloading.
   sync a day's mail, `borg create` again, and report the deduplicated size
   added. It should be close to the size of the new mail.
 - `compact` stays out of scope; `verify` reports orphaned attachments.
+- If a first sync is too slow: ingest is single-process. Split
+  `Ingester.add` into a pure planning step (parse, classify, strip, check)
+  run in worker processes and a commit step in the main one.
 - First release (JMAP only; does not wait for M9).
 
 ## Order and gates
