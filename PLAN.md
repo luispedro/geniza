@@ -11,10 +11,10 @@ design leaves open.
 
 - **M0–M4 done.** The M3 gate (`stats --parts` on real mail) is passed;
   the defaults and classification changes it led to are in DESIGN.md.
-- **M5 done except fault injection.** Ingest, `debug import-local`,
-  `show`, `export --mbox` and `verify` work, and the "done when" run on
-  real mail passed (see M5).
-- Next: M5 fault injection, then M6.
+- **M5 done.** Ingest, `debug import-local`, `show`, `export --mbox`
+  and `verify` work, the "done when" run on real mail passed, and fault
+  injection passes (see M5).
+- Next: M6.
 
 ## Tooling
 
@@ -211,6 +211,17 @@ compared), and `verify` passes.
 errors, a second import stored nothing new, `verify` found no problems,
 and `export --mbox` completed.
 
+Fault injection (`tests/test_faults.py`): a first-sync-like scenario
+(store creation, batches into segments and the journal, the end of
+initialization, a batch after it) runs in a forked child that exits at
+each `fsync`, `rename` and `link` (before and after; before an `fsync`,
+also with the unsynced end torn or zero-filled). After a writer opens the
+store, `verify` passes; running the scenario again gives what a crash-free
+run gives, with no orphans or temp files left. It found that temp files
+of `store.toml` and `initialized` could be left behind once `store.toml`
+existed; `init_store` now always removes them. M8 adds `sync.json` (step
+4) to the scenario.
+
 ### M6 — Index and search
 
 - Schema from DESIGN.md, `reindex` (headers-only pass, then FTS pass),
@@ -281,6 +292,9 @@ server is tested.
   `Ingester` lays records out by received month.
 - Tests against an in-process fake JMAP server (stdlib `http.server`).
   Manual testing against a real Fastmail account with a read-only token.
+- The fault-injection scenario (`tests/test_faults.py`) gains the
+  `sync.json` write (step 4 of the write ordering), driven by the fake
+  server.
 
 **Done when:** the first sync of a real Fastmail account completes, a second
 sync with no changes downloads nothing, and moves and flag changes show up

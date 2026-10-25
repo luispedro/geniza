@@ -11,6 +11,7 @@ directory belongs to the store it is used for.
 """
 
 import ipaddress
+import logging
 import os
 import re
 import secrets
@@ -24,6 +25,8 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from geniza.mime.recipes import Policy
+
+log = logging.getLogger(__name__)
 
 #: On-disk format version of a store, recorded in ``store.toml``.
 FORMAT_VERSION = 1
@@ -60,7 +63,8 @@ _DURATION_UNITS = {
     "d": timedelta(days=1),
     "w": timedelta(weeks=1),
 }
-_TEMP_NAME = re.compile(r"\.store\.toml\.[0-9a-f]{16}\.tmp")
+#: Temp files of ``_write_new`` in a store's root.
+_TEMP_NAME = re.compile(r"\.(?:store\.toml|initialized)\.[0-9a-f]{16}\.tmp")
 
 
 class ConfigError(Exception):
@@ -545,21 +549,23 @@ def read_store(path: Path) -> StoreInfo:
 def init_store(path: Path, *, clock: Callable[[], datetime] = _now) -> StoreInfo:
     """Check the store's ``store.toml``, writing it first if the store is
     new. The caller holds the ``StoreLock`` (which creates the directory).
+    Temp files left in the store's root by a crash are removed.
 
     A directory that has other files but no ``store.toml`` is refused: it
     is either some other directory or a store that lost its ``store.toml``,
     and giving it a new id would hide that.
     """
     path = Path(path)
-    if (path / STORE_FILE).exists():
-        return read_store(path)
     for p in path.iterdir():
         if _TEMP_NAME.fullmatch(p.name):
+            log.warning("%s: removing a temp file left by a crash", p)
             p.unlink()
-        elif p.name != ".lock":
-            raise ConfigError(
-                f"{path}: has files but no {STORE_FILE}; not creating a store here"
-            )
+    if (path / STORE_FILE).exists():
+        return read_store(path)
+    if any(p.name != ".lock" for p in path.iterdir()):
+        raise ConfigError(
+            f"{path}: has files but no {STORE_FILE}; not creating a store here"
+        )
     created: datetime = clock().astimezone(UTC).replace(microsecond=0)
     text = (
         "# geniza store; written once, do not edit.\n"

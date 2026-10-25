@@ -313,6 +313,16 @@ def test_init_store_removes_temp_files(tmp_path: Path) -> None:
     (tmp_path / ".store.toml.0123456789abcdef.tmp").write_text("partial")
     init_store(tmp_path)
     assert sorted(p.name for p in tmp_path.iterdir()) == [STORE_FILE]
+    # Also once the store exists (a crash after the link, or while writing
+    # "initialized").
+    (tmp_path / ".store.toml.0123456789abcdef.tmp").write_text("complete")
+    (tmp_path / ".initialized.0123456789abcdef.tmp").write_text("partial")
+    (tmp_path / ".other.0123456789abcdef.tmp").write_text("not ours")
+    init_store(tmp_path)
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        ".other.0123456789abcdef.tmp",
+        STORE_FILE,
+    ]
 
 
 def test_init_store_refuses_nonempty_directory(tmp_path: Path) -> None:

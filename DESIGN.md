@@ -776,8 +776,12 @@ written under the lock, by exactly one process. Readers (`search`, `show`, `expo
 4. `sync.json`: temp + `fsync` + `rename`.
 
 A crash at any point leaves at worst orphaned attachments (picked up by
-`verify`/`compact`), a torn record at the end of the last segment, or a
-torn tail of the last journal file (see [the journal](#state-the-journal)).
+`verify`/`compact`), temp files, a torn record at the end of the last
+segment, or a torn tail of the last journal file (see [the
+journal](#state-the-journal)). Temp files of `store.toml` and
+`initialized` are removed by the next writer when it opens the store,
+those of attachment files when a writer first uses their month
+directory.
 When the writer opens a segment, it removes a torn record at its end;
 before its first record it does the same for the store's last segment,
 even if it then writes to a new month's (a crash on the last day of a
