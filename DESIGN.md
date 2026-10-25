@@ -817,7 +817,8 @@ stays empty and is never rewritten; the kernel releases the lock when its
 holder exits, so a crash leaves no stale lock. A second writer fails at
 once with "store is in use" rather than waiting. Taking the lock creates
 the store directory if it is missing, so a new store's `store.toml` is
-written under the lock, by exactly one process. Readers (`search`, `show`, `export`, `verify`, and `reindex`, which writes only the cache) do not lock.
+written under the lock, by exactly one process. Readers (`search`, `show`, `export`, `verify`, and `reindex`) do not lock;
+`reindex`, `show` and `search` write the cache only.
 
 1. Attachment files: temp + `fsync` + `rename`.
 2. Segment record (or `incoming/` file): append/write + `fsync`.
@@ -997,6 +998,8 @@ segment bodies (for FTS), `incoming/`, `attachments/` and the journals.
   naming a blob gives its file and kind; `size` is the file's),
   `attachment_names(blob, msg, name)`. `mime_type` and the names come from
   the part headers in the message bodies, so the body pass fills them.
+- `segments(segment, indexed)` — how far each segment has been read: the
+  next record not indexed starts at `indexed`.
 - `fts` — FTS5 over subject, addresses, body text (HTML converted to text),
   and optionally attachment text (`attachment_text(blob, text)`, extracted
   with external tools such as `pdftotext`, keyed by blob so it is done once).
@@ -1010,6 +1013,21 @@ does not take the store lock: a record cut short at the end of a segment
 may be one being written and is skipped with a warning; other damage is
 reported (non-zero exit status) and the records it hides are left out. A
 damaged body does not hide the records after it.
+
+Commands that use the index first bring it up to date, also in one
+transaction. Segments are append-only, so the records after `indexed` are
+read (the same pass as `reindex`, a torn record at the end skipped); a
+message in `incoming/` that is now in a segment takes the record's values.
+The index is rebuilt instead if it has never read a segment, or if a
+segment it read is gone or shorter than `indexed` (a store changed by
+something other than geniza). Damage in a header is met, and reported, at
+every update until a `reindex`; a damaged body only at the update that
+reads its record, which is left out. The first record of an id or blob is
+the first one indexed, which while a store is being initialized can be in
+a later segment than another copy: both are valid. Journals and
+`incoming/` are only read by a rebuild for now (incremental updates for
+them are the last step of M6). Ingest takes the message ids and blobs the
+store holds from the updated index.
 
 The schema has a version (`PRAGMA user_version`); an index of another
 version is emptied and rebuilt, never migrated.
@@ -1065,8 +1083,9 @@ byte; otherwise `show` prints a summary: the record's segment and offset,
 its received and stored times and sizes, the message's `From`, `To`,
 `Cc`, `Date`, `Subject` and `Message-ID`, and each extracted part with
 its kind, mode and file (`--json` gives the same as an object, with the
-parts as the record header has them). Until the index exists, the id is
-found by reading every segment header.
+parts as the record header has them). The id is looked up in the index,
+which is brought up to date first; a message only in `incoming/` is not
+found (yet).
 
 `export --mbox PATH` writes every message of the store, rebuilt and
 checked against its id, to a new mboxrd file (`-` for stdout; an existing

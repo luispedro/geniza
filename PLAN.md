@@ -14,10 +14,11 @@ design leaves open.
 - **M5 done.** Ingest, `debug import-local`, `show`, `export --mbox`
   and `verify` work, the "done when" run on real mail passed, and fault
   injection passes (see M5).
-- **M6 in progress.** Done: the schema and `reindex`'s headers-only
-  pass (see M6). Next: the index replaces `ingest.Catalog.scan` and the
-  id lookup in `show`; then threading, body text and FTS, `search`, and
-  incremental updates.
+- **M6 in progress.** Done: the schema, `reindex`'s headers-only pass,
+  and updates from appended segment records, which give ingest its
+  catalog and `show` its id lookup (see M6). Next: threading, body text
+  and FTS, `search`, and incremental updates from journals and
+  `incoming/`.
 
 ## Tooling
 
@@ -249,6 +250,13 @@ Progress: `index/schema.py` (all tables but `fts`) and `reindex`'s headers-only 
 attachment files (without MIME types and names, which need the body pass),
 mailboxes (with their hierarchy), membership (with the server's received
 dates and thread ids), current flags and each account's last `seq`.
+
+The index records how far it has read each segment and is brought up to
+date before use, reading only the records appended since (or rebuilt if a
+segment shrank or vanished); `debug import-local` takes its catalog from
+it and `show` looks ids up in it. `Catalog.scan` stays as the slow
+reference the tests compare against. Journals and `incoming/` are read
+only by a rebuild until the incremental step.
 
 The journal also records what servers keep outside the messages (mailbox
 hierarchy, order and subscription, per-account received dates, server

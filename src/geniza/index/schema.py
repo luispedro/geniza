@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 INDEX_FILE = "index.sqlite"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 #: Run one statement at a time, split at ";": comments must not hold one.
 SCHEMA = """
@@ -89,6 +89,13 @@ CREATE TABLE attachment_names (
     msg TEXT NOT NULL,
     name TEXT NOT NULL,
     PRIMARY KEY (blob, msg, name)
+) WITHOUT ROWID;
+
+-- How far each segment has been read: records end at or before
+-- "indexed", and the next one starts there.
+CREATE TABLE segments (
+    segment TEXT PRIMARY KEY,
+    indexed INTEGER NOT NULL
 ) WITHOUT ROWID;
 
 -- The last journal event applied, per account.

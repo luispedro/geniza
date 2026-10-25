@@ -1,11 +1,15 @@
-"""``geniza reindex``: rebuild the index from the store (DESIGN.md, "Index
-(cache)").
+"""``geniza reindex``: rebuild the index from the store, and ``update``:
+bring it up to date (DESIGN.md, "Index (cache)").
 
 This is the headers-only pass: record headers and the header block of each
 message (decompressing only the start of its body), the files in
 ``incoming/``, the attachment files records name, and the journals. The
 index is rebuilt in one transaction, so a reader sees either the old index
 or the new one.
+
+Segments are append-only, so the index records how far it has read each
+one and ``update`` reads on from there. Journals and ``incoming/`` are only
+read by a rebuild for now.
 
 ``reindex`` reads the store without the store lock, as other readers do. A
 record cut short at the end of a segment can be one being written, so it is
@@ -27,6 +31,7 @@ from geniza.config import load, open_cache, read_store
 from geniza.index import schema
 from geniza.index.envelope import Envelope
 from geniza.store import segment
+from geniza.store.ingest import Catalog
 from geniza.store.journal import MSG_PREFIX, JournalError, State, replay
 from geniza.store.parts import parse_parts
 from geniza.store.segment import HEAD_MAX, SegmentError, TornRecord, format_time
@@ -70,11 +75,22 @@ class Report:
         return "\n".join(lines) + "\n"
 
 
+#: The first row of an id stays, except that a record replaces a file in
+#: ``incoming/`` (a message promoted since the index last saw it).
 _INSERT_MESSAGE = """
-INSERT OR IGNORE INTO messages (
+INSERT INTO messages (
     id, location, segment, offset, frame_size, size, received, date,
     from_addr, to_addr, cc_addr, subject, message_id, in_reply_to, state
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live')
+ON CONFLICT (id) DO UPDATE SET
+    location = excluded.location, segment = excluded.segment,
+    offset = excluded.offset, frame_size = excluded.frame_size,
+    size = excluded.size, received = excluded.received, date = excluded.date,
+    from_addr = excluded.from_addr, to_addr = excluded.to_addr,
+    cc_addr = excluded.cc_addr, subject = excluded.subject,
+    message_id = excluded.message_id, in_reply_to = excluded.in_reply_to,
+    state = 'live'
+WHERE messages.location = 'incoming' AND excluded.location = 'segment'
 """
 
 
@@ -91,12 +107,16 @@ def _envelope(e: Envelope) -> tuple[str | None, ...]:
 
 
 def _segments(store: Path, conn: sqlite3.Connection, report: Report) -> None:
-    """Every record, the first of each id; and the attachment files they
-    name, the first record naming each blob."""
+    """The records not indexed yet, the first indexed of each id; and the
+    attachment files they name, the first record indexed naming each
+    blob."""
+    indexed = dict(conn.execute("SELECT segment, indexed FROM segments"))
     for path in segment.segments(store):
         name = path.relative_to(store).as_posix()
+        start = indexed.get(name, 0)
         try:
-            for offset, header, head in segment.scan_heads(path):
+            for offset, header, head, end in segment.scan_heads(path, start):
+                start = end
                 report.records += 1
                 if isinstance(head, SegmentError):
                     report.problems.append(str(head))
@@ -131,6 +151,22 @@ def _segments(store: Path, conn: sqlite3.Connection, report: Report) -> None:
             log.warning("%s (being written?); skipped", e)
         except SegmentError as e:
             report.problems.append(str(e))
+        conn.execute(
+            "INSERT OR REPLACE INTO segments (segment, indexed) VALUES (?, ?)",
+            (name, start),
+        )
+
+
+def _appended_only(store: Path, conn: sqlite3.Connection) -> bool:
+    """Whether every segment the index has read is still there, at least as
+    long as it was."""
+    for name, indexed in conn.execute("SELECT segment, indexed FROM segments"):
+        try:
+            if (store / name).stat().st_size < indexed:
+                return False
+        except FileNotFoundError:
+            return False
+    return True
 
 
 def _file_size(path: Path) -> int | None:
@@ -254,30 +290,79 @@ def _time(t: datetime | None) -> str | None:
     return None if t is None else format_time(t)
 
 
-def reindex(store: Path, cache: Path) -> Report:
-    """Rebuild ``cache/index.sqlite`` from the store at ``store``."""
+def _rebuild(store: Path, conn: sqlite3.Connection, report: Report) -> None:
+    """Empty the index and build it again, inside the caller's
+    transaction."""
+    schema.create(conn)
+    states = _journals(store, report)
+    _segments(store, conn, report)
+    _incoming(store, conn, states, report)
+    for account, state in states.items():
+        _state(conn, account, state)
+
+
+def _counts(conn: sqlite3.Connection, report: Report) -> None:
+    (report.messages,) = conn.execute("SELECT count(*) FROM messages").fetchone()
+    (report.attachments,) = conn.execute("SELECT count(*) FROM attachments").fetchone()
+    (report.accounts,) = conn.execute("SELECT count(*) FROM accounts").fetchone()
+
+
+def _open(store: Path, cache: Path) -> sqlite3.Connection:
     info = read_store(store)
     open_cache(cache, info.id)
+    return schema.connect(cache / schema.INDEX_FILE)
+
+
+def reindex(store: Path, cache: Path) -> Report:
+    """Rebuild ``cache/index.sqlite`` from the store at ``store``."""
     report = Report()
-    conn = schema.connect(cache / schema.INDEX_FILE)
+    conn = _open(store, cache)
     try:
         with schema.transaction(conn):
-            schema.create(conn)
-            states = _journals(store, report)
-            _segments(store, conn, report)
-            _incoming(store, conn, states, report)
-            for account, state in states.items():
-                _state(conn, account, state)
-            report.accounts = len(states)
-            (report.messages,) = conn.execute(
-                "SELECT count(*) FROM messages"
-            ).fetchone()
-            (report.attachments,) = conn.execute(
-                "SELECT count(*) FROM attachments"
-            ).fetchone()
+            _rebuild(store, conn, report)
+            _counts(conn, report)
     finally:
         conn.close()
     return report
+
+
+def update(store: Path, cache: Path) -> sqlite3.Connection:
+    """Open the index of the store at ``store``, bringing it up to date:
+    index the records appended to segments since it was last updated, or
+    rebuild it if it has never read a segment or a segment it read is gone
+    or shorter. Problems found are logged as warnings."""
+    report = Report()
+    conn = _open(store, cache)
+    try:
+        with schema.transaction(conn):
+            if conn.execute("SELECT 1 FROM segments LIMIT 1").fetchone() is None:
+                _rebuild(store, conn, report)
+            elif not _appended_only(store, conn):
+                log.warning("%s: segments changed since indexed; rebuilding", cache)
+                _rebuild(store, conn, report)
+            else:
+                _segments(store, conn, report)
+    except BaseException:
+        conn.close()
+        raise
+    for problem in report.problems:
+        log.warning("%s", problem)
+    log.debug("index: %d records read", report.records)
+    return conn
+
+
+def catalog(conn: sqlite3.Connection) -> Catalog:
+    """What the store holds, for ingest, from an up-to-date index. A record
+    whose body is damaged is not in it."""
+    return Catalog(
+        messages={
+            id: (name, offset)
+            for id, name, offset in conn.execute(
+                "SELECT id, segment, offset FROM messages WHERE location = 'segment'"
+            )
+        },
+        blobs=dict(conn.execute("SELECT blob, file FROM attachments")),
+    )
 
 
 def run(args: argparse.Namespace, out: Output) -> int:

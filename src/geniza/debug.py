@@ -18,6 +18,7 @@ import os
 import time
 from collections import Counter
 from collections.abc import Iterator
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from email import policy
 from email.parser import BytesHeaderParser
@@ -26,6 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO
 
 from geniza.config import init_store, load
+from geniza.index import reindex
 from geniza.mime.recipes import Mode
 from geniza.stats import maildir_files
 from geniza.store import attachments, segment
@@ -184,8 +186,10 @@ def import_local(args: argparse.Namespace, out: Output) -> int:
     try:
         with StoreLock(store) as lock:
             init_store(store)
+            with closing(reindex.update(store, store_config.cache)) as conn:
+                catalog = reindex.catalog(conn)
             policy = store_config.attachments
-            with Ingester(store, lock, policy=policy) as ing:
+            with Ingester(store, lock, policy=policy, catalog=catalog) as ing:
                 for name, data, received in messages:
                     if isinstance(data, OSError):
                         log.warning("cannot read %s: %s", name, data.strerror)

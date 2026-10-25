@@ -1,8 +1,9 @@
 """``geniza show ID [--raw]``: one message of a store.
 
 ``ID`` is a message id (``sha256:…``) or a prefix of its hex digest, with
-or without ``sha256:``, at least ``MIN_PREFIX`` digits long. Until the
-index exists (M6) it is looked up by scanning every segment header.
+or without ``sha256:``, at least ``MIN_PREFIX`` digits long. It is looked
+up in the index, which is brought up to date first; only messages in
+segments are found.
 
 With ``--raw`` the original message is written to stdout byte for byte;
 otherwise a summary: where the record is, its dates and sizes, the main
@@ -13,12 +14,14 @@ and checked against its id first.
 import argparse
 import logging
 import re
+import sqlite3
 import sys
+from contextlib import closing
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from geniza.config import load, read_store
+from geniza.config import load
+from geniza.index import reindex
 from geniza.mime import tree
 from geniza.store import reader, segment
 from geniza.store.attachments import AttachmentError
@@ -43,10 +46,10 @@ _HEX = re.compile(r"[0-9a-f]+")
 
 @dataclass(frozen=True)
 class Found:
+    id: str
     #: Relative to the store root.
     segment: str
     offset: int
-    header: Header
 
 
 def parse_query(query: str) -> str:
@@ -59,19 +62,17 @@ def parse_query(query: str) -> str:
     return digest
 
 
-def find(store: Path, digest: str) -> list[Found]:
-    """The records whose id starts with ``MSG_PREFIX + digest``, the first
-    record of each id only, in store order."""
+def find(conn: sqlite3.Connection, digest: str) -> list[Found]:
+    """The messages in segments whose id starts with ``MSG_PREFIX +
+    digest``, by id, with the record the index has for each."""
     prefix = MSG_PREFIX + digest
-    found: dict[str, Found] = {}
-    for path in segment.segments(store):
-        name = path.relative_to(store).as_posix()
-        for offset, header in segment.scan(path):
-            if header.id.startswith(prefix) and header.id not in found:
-                found[header.id] = Found(name, offset, header)
-                if len(digest) == 64:
-                    return list(found.values())
-    return list(found.values())
+    # Every character after the prefix is a hex digit, so below "g".
+    rows = conn.execute(
+        "SELECT id, segment, offset FROM messages WHERE location = 'segment'"
+        " AND id >= ? AND id < ? ORDER BY id",
+        (prefix, prefix + "g"),
+    )
+    return [Found(*row) for row in rows]
 
 
 def _headers(data: bytes) -> dict[str, list[str]]:
@@ -90,8 +91,7 @@ def _headers(data: bytes) -> dict[str, list[str]]:
     return headers
 
 
-def summary(found: Found, data: bytes) -> dict[str, Any]:
-    header = found.header
+def summary(found: Found, header: Header, data: bytes) -> dict[str, Any]:
     return {
         "id": header.id,
         "segment": found.segment,
@@ -132,21 +132,22 @@ def run(args: argparse.Namespace, out: Output) -> int:
     except ValueError as e:
         log.error("%s", e)
         return 2
-    store = load(args.config).store(args.store).path
-    read_store(store)
+    config = load(args.config).store(args.store)
+    store = config.path
+    with closing(reindex.update(store, config.cache)) as conn:
+        matches = find(conn, digest)
+    if not matches:
+        log.error("%s: no such message", args.id)
+        return 1
+    if len(matches) > 1:
+        log.error("%s: ambiguous, %d messages match:", args.id, len(matches))
+        for m in matches[:MAX_LISTED]:
+            log.error("  %s", m.id)
+        if len(matches) > MAX_LISTED:
+            log.error("  …")
+        return 1
+    [found] = matches
     try:
-        matches = find(store, digest)
-        if not matches:
-            log.error("%s: no such message", args.id)
-            return 1
-        if len(matches) > 1:
-            log.error("%s: ambiguous, %d messages match:", args.id, len(matches))
-            for m in matches[:MAX_LISTED]:
-                log.error("  %s", m.header.id)
-            if len(matches) > MAX_LISTED:
-                log.error("  …")
-            return 1
-        [found] = matches
         record, stripped = segment.read(store / found.segment, found.offset)
         data = reader.rebuild(store, record, stripped)
     except (SegmentError, RebuildError, AttachmentError) as e:
@@ -159,6 +160,6 @@ def run(args: argparse.Namespace, out: Output) -> int:
         sys.stdout.buffer.write(data)
         sys.stdout.buffer.flush()
     else:
-        info = summary(found, data)
+        info = summary(found, record, data)
         out.result(text(info), info)
     return 0

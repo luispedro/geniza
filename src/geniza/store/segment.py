@@ -248,12 +248,13 @@ def scan(path: Path, start: int = 0) -> Iterator[tuple[int, Header]]:
 
 def scan_heads(
     path: Path, start: int = 0
-) -> Iterator[tuple[int, Header, bytes | SegmentError]]:
-    """Like ``scan``, also yielding the start of each stripped message: its
-    header block if that ends within ``HEAD_MAX`` bytes, else that many
-    bytes (or the whole message). Only as much of each body is decompressed
-    as that takes, so its checksum is not checked. A damaged body does not
-    hide the records after it: its error is yielded in place of the start."""
+) -> Iterator[tuple[int, Header, bytes | SegmentError, int]]:
+    """Like ``scan``, also yielding the start of each stripped message and
+    where the record ends. The start is the message's header block if that
+    ends within ``HEAD_MAX`` bytes, else that many bytes (or the whole
+    message). Only as much of each body is decompressed as that takes, so
+    its checksum is not checked. A damaged body does not hide the records
+    after it: its error is yielded in place of the start."""
     with open(path, "rb") as f:
         size = os.fstat(f.fileno()).st_size
         offset = start
@@ -265,8 +266,9 @@ def scan_heads(
                 head = _head(f, header.frame_size)
             except (ValueError, zstd.ZstdError) as e:
                 head = SegmentError(path, offset, f"bad body frame: {e}")
-            yield offset, header, head
-            offset = body_start + header.frame_size
+            end = body_start + header.frame_size
+            yield offset, header, head, end
+            offset = end
 
 
 def header_end(data: bytes | bytearray) -> int | None:

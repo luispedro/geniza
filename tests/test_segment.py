@@ -320,8 +320,11 @@ def test_scan_heads(
     store = tmp_path_factory.mktemp("store")
     [(name, _), *_] = write(store, msgs)
     heads = list(scan_heads(store / name))
-    assert [(o, h) for o, h, _ in heads] == list(scan(store / name))
-    assert [head for _, _, head in heads] == [expected_head(m) for m in msgs]
+    assert [(o, h) for o, h, _, _ in heads] == list(scan(store / name))
+    assert [head for _, _, head, _ in heads] == [expected_head(m) for m in msgs]
+    # Each record ends where the next starts, the last at the end of the file.
+    ends = [o for o, *_ in heads[1:]] + [(store / name).stat().st_size]
+    assert [end for *_, end in heads] == ends
 
 
 @pytest.mark.parametrize(
@@ -337,7 +340,7 @@ def test_scan_heads(
 )
 def test_scan_heads_limits(tmp_path: Path, data: bytes) -> None:
     [(name, _)] = write(tmp_path, [data])
-    [(_, _, head)] = scan_heads(tmp_path / name)
+    [(_, _, head, _)] = scan_heads(tmp_path / name)
     assert isinstance(head, bytes)
     assert data.startswith(head)
     if (end := header_end(data)) is not None and end <= HEAD_MAX:
@@ -353,6 +356,6 @@ def test_scan_heads_damaged_body(tmp_path: Path) -> None:
     data = bytearray(path.read_bytes())
     data[second - 8 : second - 4] = b"\xff" * 4  # inside the first body frame
     path.write_bytes(data)
-    [(_, _, first_head), (offset, _, second_head)] = scan_heads(path)
+    [(_, _, first_head, _), (offset, _, second_head, _)] = scan_heads(path)
     assert isinstance(first_head, SegmentError)
     assert (offset, second_head) == (second, b"A: 2\n\n")

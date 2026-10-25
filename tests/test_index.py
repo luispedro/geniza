@@ -4,23 +4,25 @@ import json
 import logging
 import os
 import sqlite3
+import tempfile
 from collections.abc import Iterator
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from conftest import corpus_files
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from geniza import cli
 from geniza.config import init_store, read_store
 from geniza.index import schema
 from geniza.index.envelope import Envelope
-from geniza.index.reindex import reindex
+from geniza.index.reindex import catalog, reindex, update
 from geniza.mime.recipes import Policy
 from geniza.store import segment
-from geniza.store.ingest import Ingester, message_id
+from geniza.store.ingest import Catalog, Ingester, message_id
 from geniza.store.journal import (
     Add,
     Drop,
@@ -400,6 +402,141 @@ def test_reindex_cache_of_another_store(
     make_store(other, [CORPUS["plain_text_lf"]])
     assert reindex(other, cache).messages == 1
     assert (cache / "store-id").read_text().strip() == str(read_store(other).id)
+
+
+# --- update ------------------------------------------------------------------
+
+
+def dump(cache: Path) -> dict[str, list[tuple[object, ...]]]:
+    """What the segments give the index."""
+    return {
+        t: query(cache, f"SELECT * FROM {t} ORDER BY 1")
+        for t in ("messages", "attachments", "segments")
+    }
+
+
+def rebuilt(store: Path, tmp_path: Path) -> dict[str, list[tuple[object, ...]]]:
+    reindex(store, tmp_path / "rebuilt")
+    return dump(tmp_path / "rebuilt")
+
+
+def test_update_builds_a_new_index(store: Path, cache: Path, tmp_path: Path) -> None:
+    update(store, cache).close()
+    assert dump(cache) == rebuilt(store, tmp_path)
+    [(name, indexed)] = dump(cache)["segments"]
+    assert indexed == (store / str(name)).stat().st_size
+
+
+MONTHS = [datetime(2019, 3, 4, tzinfo=UTC), datetime(2024, 12, 1, tzinfo=UTC), T0]
+
+
+@settings(max_examples=20, deadline=None)
+@given(
+    st.lists(
+        st.lists(
+            st.tuples(st.sampled_from(sorted(CORPUS)), st.sampled_from(MONTHS)),
+            max_size=6,
+        ),
+        min_size=1,
+        max_size=4,
+    ),
+    st.integers(1, 6000),
+)
+def test_update_matches_a_rebuild(
+    batches: list[list[tuple[str, datetime]]], cap: int
+) -> None:
+    """Batches ingested with the catalog of the updated index, into
+    segments of several months (records go to earlier ones too while the
+    store is being initialized)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store, cache = Path(tmp) / "store", Path(tmp) / "cache"
+        with StoreLock(store) as lock:
+            init_store(store)
+            for batch in batches:
+                with closing(update(store, cache)) as conn:
+                    known = catalog(conn)
+                with Ingester(
+                    store,
+                    lock,
+                    policy=EXTRACT_ALL,
+                    catalog=known,
+                    cap=cap,
+                    clock=lambda: T0,
+                ) as ing:
+                    for name, received in batch:
+                        ing.add(CORPUS[name], received)
+        with closing(update(store, cache)) as conn:
+            assert catalog(conn) == Catalog.scan(store)
+        assert dump(cache) == rebuilt(store, Path(tmp))
+
+
+def test_update_promoted_message(tmp_path: Path, cache: Path) -> None:
+    store = tmp_path / "store"
+    make_store(store, [CORPUS["plain_text_lf"]])
+    data = CORPUS["pgp_signed"]
+    put_incoming(store, "a", data, 1_700_000_000)
+    update(store, cache).close()
+    sql = "SELECT location, received FROM messages WHERE id = ?"
+    assert query(cache, sql, message_id(data)) == [("incoming", "2023-11-14T22:13:20Z")]
+    make_store(store, [data])
+    update(store, cache).close()
+    assert query(cache, sql, message_id(data)) == [("segment", "2026-10-23T14:02:11Z")]
+    assert dump(cache) == rebuilt(store, tmp_path)
+
+
+def test_update_reads_on_after_a_torn_record(
+    store: Path, cache: Path, tmp_path: Path
+) -> None:
+    [path] = segment.segments(store)
+    offsets = [o for o, _ in segment.scan(path)]
+    data = path.read_bytes()
+    path.write_bytes(data[: offsets[-1] + 30])
+    update(store, cache).close()
+    assert dump(cache)["segments"] == [
+        (path.relative_to(store).as_posix(), offsets[-1])
+    ]
+    assert len(dump(cache)["messages"]) == len(offsets) - 1
+    path.write_bytes(data)  # the record is complete now
+    update(store, cache).close()
+    assert dump(cache) == rebuilt(store, tmp_path)
+
+
+def test_update_rebuilds_when_a_segment_changed(
+    store: Path, cache: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    update(store, cache).close()
+    [path] = segment.segments(store)
+    offsets = [o for o, _ in segment.scan(path)]
+    logging.getLogger("geniza").addHandler(handler := logging.StreamHandler())
+    try:
+        path.write_bytes(path.read_bytes()[: offsets[3]])
+        update(store, cache).close()
+        assert "rebuilding" in capsys.readouterr().err
+        assert len(dump(cache)["messages"]) == 3
+        path.unlink()
+        update(store, cache).close()
+        assert "rebuilding" in capsys.readouterr().err
+        assert dump(cache)["messages"] == []
+    finally:
+        logging.getLogger("geniza").removeHandler(handler)
+
+
+def test_update_reports_a_damaged_header_each_time(
+    store: Path, cache: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    [path] = segment.segments(store)
+    offsets = [o for o, _ in segment.scan(path)]
+    data = bytearray(path.read_bytes())
+    data[offsets[3]] ^= 0xFF  # the fourth record's magic
+    path.write_bytes(data)
+    logging.getLogger("geniza").addHandler(handler := logging.StreamHandler())
+    try:
+        for _ in range(2):
+            update(store, cache).close()
+            assert f"offset {offsets[3]}" in capsys.readouterr().err
+            assert len(dump(cache)["messages"]) == 3
+    finally:
+        logging.getLogger("geniza").removeHandler(handler)
 
 
 @pytest.fixture

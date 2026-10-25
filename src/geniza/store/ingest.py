@@ -58,10 +58,11 @@ def _now() -> datetime:
 class Catalog:
     """What the store holds: messages by id, attachment files by blob.
 
-    Until the index exists, this is built by ``scan``ning segment headers.
-    A blob found only in an attachment file that no record names (orphaned
-    by a crash) is not in it; ``AttachmentWriter`` reuses such a file if it
-    is in the current month.
+    Callers with a cache take it from the index (``index.reindex.catalog``);
+    ``scan``ning every segment header gives the same, slowly. A blob found
+    only in an attachment file that no record names (orphaned by a crash)
+    is not in it; ``AttachmentWriter`` reuses such a file if it is in the
+    current month.
     """
 
     #: Message id → (segment, offset).
@@ -110,7 +111,8 @@ class Ingester:
     still going on. On creation, a torn record is removed: at the end of
     any segment while initializing (records then go to any month), else at
     the end of the last one. Without a ``catalog``, one is then built by
-    scanning the segments.
+    scanning the segments. A catalog from the index can be taken before
+    the ingester is created: a torn record is never in the index.
     """
 
     def __init__(

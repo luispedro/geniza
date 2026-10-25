@@ -336,6 +336,21 @@ def test_show_summary(
     assert with_parts > 0
 
 
+def test_show_after_another_import(
+    config: Path, tmp_path: Path, capsysbinary: pytest.CaptureFixture[bytes]
+) -> None:
+    """The index that the first import built is brought up to date."""
+    for i, data in enumerate(MSGS[:2]):
+        box = tmp_path / f"box{i}"
+        for d in ("cur", "new", "tmp"):
+            (box / d).mkdir(parents=True)
+        (box / "new" / "1.host").write_bytes(data)
+        assert run(config, "debug", "import-local", box) == 0
+        assert run(config, "show", "--raw", message_id(data)) == 0
+        assert capsysbinary.readouterr().out.endswith(data)
+    assert (config.parent / "cache" / "index.sqlite").exists()
+
+
 def test_show_errors(
     store: Path,
     config: Path,
