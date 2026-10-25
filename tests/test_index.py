@@ -1,4 +1,5 @@
-"""The index: envelopes, the schema and ``reindex`` (headers-only pass)."""
+"""The index: envelopes, the schema, ``reindex`` and ``update`` (headers and
+body passes)."""
 
 import json
 import logging
@@ -17,11 +18,13 @@ from hypothesis import strategies as st
 
 from geniza import cli
 from geniza.config import init_store, read_store
-from geniza.index import schema
+from geniza.index import bodies, schema
 from geniza.index.envelope import Envelope
 from geniza.index.reindex import catalog, reindex, update
+from geniza.mime import tree
 from geniza.mime.recipes import Policy
-from geniza.store import segment
+from geniza.mime.text import clean, texts
+from geniza.store import reader, segment
 from geniza.store.ingest import Catalog, Ingester, message_id
 from geniza.store.journal import (
     Add,
@@ -36,6 +39,7 @@ from geniza.store.lock import StoreLock
 
 T0 = datetime(2026, 10, 23, 14, 2, 11, tzinfo=UTC)
 CORPUS = {p.stem: p.read_bytes() for p in corpus_files()}
+CORPUS_BY_ID = {message_id(m): m for m in CORPUS.values()}
 EXTRACT_ALL = Policy(min_size=1, decoration_min_size=1)
 
 
@@ -212,7 +216,6 @@ def test_reindex_messages(store: Path, cache: Path) -> None:
         for path in segment.segments(store)
         for o, h in segment.scan(path)
     }
-    by_id = {message_id(m): m for m in CORPUS.values()}
     for row in rows:
         id_, location, name, offset, frame_size, size, received, *env, state = row
         assert isinstance(id_, str)
@@ -224,7 +227,7 @@ def test_reindex_messages(store: Path, cache: Path) -> None:
             "2026-10-23T14:02:11Z",
         )
         # The header block alone gives what the whole message gives.
-        full = Envelope.parse(by_id[id_])
+        full = Envelope.parse(CORPUS_BY_ID[id_])
         assert tuple(env) == (
             full.date,
             full.from_addr,
@@ -246,11 +249,23 @@ def test_reindex_attachments(store: Path, cache: Path) -> None:
     reindex(store, cache)
     rows = query(cache, "SELECT blob, file, kind, mime_type, size FROM attachments")
     assert rows
+    # The type of the first message naming a blob; every name it has.
+    types: dict[str, str] = {}
+    names = set()
+    for r in reader.records(store):
+        nodes = {n.path: n for n in tree.parse(CORPUS_BY_ID[r.header.id]).walk()}
+        for part in r.header.parts:
+            node = nodes[part["path"]]
+            types.setdefault(part["blob"], node.content_type)
+            if node.filename:
+                names.add((part["blob"], r.header.id, clean(node.filename)))
     for blob, file, kind, mime_type, size in rows:
         assert isinstance(blob, str) and isinstance(file, str)
         assert kind in ("attachment", "decoration")
-        assert mime_type is None  # the body pass fills it in
+        assert mime_type == types[blob]
         assert size == (store / file).stat().st_size
+    assert set(query(cache, "SELECT * FROM attachment_names")) == names
+    assert any(name == "été.pdf" for _, _, name in names)
     # Every blob that a record names, once.
     blobs = {
         p["blob"]
@@ -413,8 +428,12 @@ def dump(cache: Path) -> dict[str, list[tuple[object, ...]]]:
     messages were indexed in, so each thread is named by its first message
     id instead."""
     tables = {
-        t: query(cache, f"SELECT * FROM {t} ORDER BY 1")
-        for t in ("attachments", "segments")
+        t: query(cache, f"SELECT * FROM {t} ORDER BY {order}")
+        for t, order in [
+            ("attachments", "1"),
+            ("attachment_names", "1, 2, 3"),
+            ("segments", "1"),
+        ]
     }
     name = dict(
         query(cache, "SELECT thread_id, min(id) FROM messages GROUP BY thread_id")
@@ -426,7 +445,24 @@ def dump(cache: Path) -> dict[str, list[tuple[object, ...]]]:
     tables["threads"] = [
         (k, name[t]) for k, t in query(cache, "SELECT * FROM threads ORDER BY 1")
     ]
+    tables["fts"] = fts_terms(cache)
     return tables
+
+
+def fts_terms(cache: Path) -> list[tuple[object, ...]]:
+    """Every term of the search index, by message id (rowids depend on the
+    order messages were indexed in)."""
+    conn = sqlite3.connect(cache / schema.INDEX_FILE)
+    try:
+        conn.execute(
+            "CREATE VIRTUAL TABLE temp.terms USING fts5vocab(main, fts, instance)"
+        )
+        return conn.execute(
+            "SELECT m.id, t.term, t.col, t.offset FROM temp.terms t"
+            " JOIN messages m ON m.rowid = t.doc ORDER BY 1, 2, 3, 4"
+        ).fetchall()
+    finally:
+        conn.close()
 
 
 def query_dicts(cache: Path, sql: str) -> list[dict[str, object]]:
@@ -444,7 +480,7 @@ def rebuilt(store: Path, tmp_path: Path) -> dict[str, list[tuple[object, ...]]]:
 
 
 def test_update_builds_a_new_index(store: Path, cache: Path, tmp_path: Path) -> None:
-    update(store, cache).close()
+    update(store, cache, text=True).close()
     assert dump(cache) == rebuilt(store, tmp_path)
     [(name, indexed)] = dump(cache)["segments"]
     assert indexed == (store / str(name)).stat().st_size
@@ -506,7 +542,7 @@ def test_update_matches_a_rebuild(
                 ) as ing:
                     for name, received in batch:
                         ing.add(POOL[name], received)
-        with closing(update(store, cache)) as conn:
+        with closing(update(store, cache, text=True)) as conn:
             assert catalog(conn) == Catalog.scan(store)
         assert dump(cache) == rebuilt(store, Path(tmp))
 
@@ -516,11 +552,12 @@ def test_update_promoted_message(tmp_path: Path, cache: Path) -> None:
     make_store(store, [CORPUS["plain_text_lf"]])
     data = CORPUS["pgp_signed"]
     put_incoming(store, "a", data, 1_700_000_000)
-    update(store, cache).close()
+    update(store, cache, text=True).close()
     sql = "SELECT location, received FROM messages WHERE id = ?"
     assert query(cache, sql, message_id(data)) == [("incoming", "2023-11-14T22:13:20Z")]
+    assert search(cache, '"design notes"') == {"pgp_signed"}
     make_store(store, [data])
-    update(store, cache).close()
+    update(store, cache, text=True).close()
     assert query(cache, sql, message_id(data)) == [("segment", "2026-10-23T14:02:11Z")]
     assert dump(cache) == rebuilt(store, tmp_path)
 
@@ -538,7 +575,7 @@ def test_update_reads_on_after_a_torn_record(
     ]
     assert len(dump(cache)["messages"]) == len(offsets) - 1
     path.write_bytes(data)  # the record is complete now
-    update(store, cache).close()
+    update(store, cache, text=True).close()
     assert dump(cache) == rebuilt(store, tmp_path)
 
 
@@ -578,6 +615,125 @@ def test_update_reports_a_damaged_header_each_time(
             assert len(dump(cache)["messages"]) == 3
     finally:
         logging.getLogger("geniza").removeHandler(handler)
+
+
+# --- body pass ---------------------------------------------------------------
+
+
+def search(cache: Path, match: str) -> set[str]:
+    """The corpus messages (or ids, for others) an FTS5 query matches."""
+    names = {message_id(m): n for n, m in POOL.items()}
+    rows = query(
+        cache,
+        "SELECT m.id FROM fts JOIN messages m ON m.rowid = fts.rowid WHERE fts MATCH ?",
+        match,
+    )
+    return {names.get(str(id_), str(id_)) for (id_,) in rows}
+
+
+def test_text_of_stripped_messages(store: Path) -> None:
+    """What the body pass relies on: a stripped message has the text and
+    part headers of the original."""
+    for r in reader.records(store):
+        data = reader.rebuild(store, r.header, r.stripped)
+        assert [(t.path, t.text) for t in texts(r.stripped)] == [
+            (t.path, t.text) for t in texts(data)
+        ]
+        assert [
+            (n.path, n.content_type, n.filename) for n in tree.parse(r.stripped).walk()
+        ] == [(n.path, n.content_type, n.filename) for n in tree.parse(data).walk()]
+
+
+def test_reindex_reads_bodies(store: Path, cache: Path) -> None:
+    report = reindex(store, cache)
+    assert report.bodies == len(CORPUS) and report.problems == []
+    assert query(cache, "SELECT count(*) FROM messages WHERE body_read = 0") == [(0,)]
+    assert search(cache, "bistro") == {"html_only_meta_charset"}
+    assert search(cache, "subject:bistro") == {"html_only_meta_charset"}
+    assert search(cache, "body:cafe") == {"html_only_meta_charset"}  # Café
+    # Neither the title nor the script is text.
+    assert "html_only_meta_charset" not in search(cache, '"not text"')
+    # The text of an attached message, and the names of attachments.
+    assert "forwarded_rfc822" in search(cache, '"original message text"')
+    assert search(cache, 'attachments:"quarterly report pdf"') == {
+        "forwarded_rfc822",
+        "outlook_related",
+    }
+    assert search(cache, "attachments:image001") == {"outlook_related"}
+    assert search(cache, "attachments:ete") == {"filenames_encoded"}
+    assert search(cache, "attachments:отчет") == {"filenames_encoded"}
+    # Addresses in their columns: Carol is only in the attached message.
+    assert "forwarded_rfc822" not in search(cache, "from_addr:carol")
+    assert "plain_text_lf" in search(cache, "to_addr:bob")
+    assert search(cache, "olá") == search(cache, "ola") >= {"flowed_unlabelled_utf8"}
+
+
+def test_update_reads_bodies_only_for_text(store: Path, cache: Path) -> None:
+    update(store, cache).close()
+    assert query(cache, "SELECT count(*) FROM messages WHERE body_read = 1") == [(0,)]
+    assert search(cache, "bistro") == set()
+    update(store, cache, text=True).close()
+    assert search(cache, "bistro") == {"html_only_meta_charset"}
+
+
+def test_body_pass_goes_on_where_it_stopped(
+    store: Path, cache: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(bodies, "BATCH", 3)
+    calls = 0
+    read = bodies._read
+
+    def interrupted(*args: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 8:
+            raise KeyboardInterrupt
+        read(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(bodies, "_read", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        update(store, cache, text=True)
+    # Two batches committed, the third rolled back.
+    assert query(cache, "SELECT count(*) FROM messages WHERE body_read = 1") == [(6,)]
+    update(store, cache, text=True).close()
+    assert dump(cache) == rebuilt(store, tmp_path)
+
+
+def test_body_pass_reports_a_damaged_body_once(
+    tmp_path: Path, cache: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    store = tmp_path / "store"
+    # Long enough that the headers pass stops well before the frame's end.
+    long = b"From: x@example.org\nSubject: long\n\n" + b"".join(
+        b"%d\n" % (i * 2654435761 % 2**32) for i in range(30_000)
+    )
+    make_store(store, [CORPUS["plain_text_lf"], long, CORPUS["pgp_signed"]])
+    [path] = segment.segments(store)
+    offsets = [o for o, _ in segment.scan(path)]
+    data = bytearray(path.read_bytes())
+    data[offsets[2] - 1] ^= 0xFF  # the second record's frame checksum
+    path.write_bytes(data)
+    logging.getLogger("geniza").addHandler(handler := logging.StreamHandler())
+    try:
+        update(store, cache, text=True).close()
+        assert f"offset {offsets[1]}" in capsys.readouterr().err
+        update(store, cache, text=True).close()
+        assert capsys.readouterr().err == ""
+    finally:
+        logging.getLogger("geniza").removeHandler(handler)
+    # Its headers are indexed; its text is not.
+    assert len(dump(cache)["messages"]) == 3
+    assert search(cache, "subject:long") == set()
+    assert search(cache, "subject:plain") == {"plain_text_lf"}
+
+
+def test_body_pass_caps_the_text(
+    store: Path, cache: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(bodies, "MAX_TEXT", 10)
+    reindex(store, cache)
+    assert search(cache, "hi") >= {"plain_text_lf"}  # "Hi Bob,"
+    assert "plain_text_lf" not in search(cache, "body:plain")
 
 
 @pytest.fixture

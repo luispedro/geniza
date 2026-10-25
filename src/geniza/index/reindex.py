@@ -1,12 +1,12 @@
 """``geniza reindex``: rebuild the index from the store, and ``update``:
 bring it up to date (DESIGN.md, "Index (cache)").
 
-This is the headers-only pass: record headers and the header block of each
+The headers-only pass reads record headers and the header block of each
 message (decompressing only the start of its body, which also gives its
 thread), the files in ``incoming/``, the attachment files records name,
-and the journals. The
-index is rebuilt in one transaction, so a reader sees either the old index
-or the new one.
+and the journals. The index is rebuilt in one transaction, so a reader sees
+either the old index or the new one. The body pass (``bodies``) then reads
+each message in full for search, in transactions of its own.
 
 Segments are append-only, so the index records how far it has read each
 one and ``update`` reads on from there. Journals and ``incoming/`` are only
@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from geniza.config import load, open_cache, read_store
-from geniza.index import schema, threads
+from geniza.index import bodies, schema, threads
 from geniza.index.envelope import Envelope
 from geniza.store import segment
 from geniza.store.ingest import Catalog
@@ -52,6 +52,8 @@ class Report:
     incoming: int = 0
     attachments: int = 0
     accounts: int = 0
+    #: Messages read by the body pass.
+    bodies: int = 0
     problems: list[str] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
@@ -61,6 +63,7 @@ class Report:
             "incoming": self.incoming,
             "attachments": self.attachments,
             "accounts": self.accounts,
+            "bodies": self.bodies,
             "problems": self.problems,
         }
 
@@ -70,6 +73,7 @@ class Report:
             f" {self.incoming} files in incoming/)",
             f"attachment files: {self.attachments}",
             f"accounts: {self.accounts}",
+            f"message texts read: {self.bodies}",
             f"problems: {len(self.problems)}",
         ]
         lines += [f"  {p}" for p in self.problems]
@@ -77,7 +81,8 @@ class Report:
 
 
 #: The first row of an id stays, except that a record replaces a file in
-#: ``incoming/`` (a message promoted since the index last saw it).
+#: ``incoming/`` (a message promoted since the index last saw it), which
+#: the body pass then reads again.
 _INSERT_MESSAGE = """
 INSERT INTO messages (
     id, location, segment, offset, frame_size, size, received, date,
@@ -90,7 +95,7 @@ ON CONFLICT (id) DO UPDATE SET
     from_addr = excluded.from_addr, to_addr = excluded.to_addr,
     cc_addr = excluded.cc_addr, subject = excluded.subject,
     message_id = excluded.message_id, in_reply_to = excluded.in_reply_to,
-    state = 'live'
+    state = 'live', body_read = 0
 WHERE messages.location = 'incoming' AND excluded.location = 'segment'
 """
 
@@ -319,23 +324,26 @@ def _open(store: Path, cache: Path) -> sqlite3.Connection:
 
 
 def reindex(store: Path, cache: Path) -> Report:
-    """Rebuild ``cache/index.sqlite`` from the store at ``store``."""
+    """Rebuild ``cache/index.sqlite`` from the store at ``store``, then
+    read every message's body."""
     report = Report()
     conn = _open(store, cache)
     try:
         with schema.transaction(conn):
             _rebuild(store, conn, report)
             _counts(conn, report)
+        report.bodies = bodies.read_bodies(store, conn, report.problems)
     finally:
         conn.close()
     return report
 
 
-def update(store: Path, cache: Path) -> sqlite3.Connection:
+def update(store: Path, cache: Path, *, text: bool = False) -> sqlite3.Connection:
     """Open the index of the store at ``store``, bringing it up to date:
     index the records appended to segments since it was last updated, or
     rebuild it if it has never read a segment or a segment it read is gone
-    or shorter. Problems found are logged as warnings."""
+    or shorter. With ``text``, also read the bodies not read yet, for
+    search. Problems found are logged as warnings."""
     report = Report()
     conn = _open(store, cache)
     try:
@@ -347,12 +355,14 @@ def update(store: Path, cache: Path) -> sqlite3.Connection:
                 _rebuild(store, conn, report)
             else:
                 _segments(store, conn, report)
+        if text:
+            report.bodies = bodies.read_bodies(store, conn, report.problems)
     except BaseException:
         conn.close()
         raise
     for problem in report.problems:
         log.warning("%s", problem)
-    log.debug("index: %d records read", report.records)
+    log.debug("index: %d records, %d bodies read", report.records, report.bodies)
     return conn
 
 

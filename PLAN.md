@@ -16,9 +16,10 @@ design leaves open.
   injection passes (see M5).
 - **M6 in progress.** Done: the schema, `reindex`'s headers-only pass,
   and updates from appended segment records, which give ingest its
-  catalog and `show` its id lookup, threading, and message text, which
-  `show` prints (see M6). Next: the body pass and FTS, `search`, and
-  incremental updates from journals and `incoming/`.
+  catalog and `show` its id lookup, threading, message text, which
+  `show` prints, and the body pass that fills the FTS table and the
+  attachments' types and names (see M6). Next: `search`, and incremental
+  updates from journals and `incoming/`.
 
 ## Tooling
 
@@ -274,6 +275,15 @@ with `html.parser`) for `show` now and the FTS pass next. Property tests
 round-trip plain text through each transfer encoding and check that
 arbitrary bytes never raise; two corpus cases cover an HTML-only message
 whose charset is in a `<meta>` tag and unlabelled flowed UTF-8.
+
+The body pass (`index/bodies.py`) reads each message once, from the
+stripped message (a test checks that it has the original's text and part
+headers for every corpus message), into a contentless FTS5 table, and
+fills `attachments.mime_type` and `attachment_names`. It commits in
+batches and resumes after an interruption (tested, as is a damaged body
+reported once); `reindex` always runs it, `update` only when asked
+(`text=True`, for `search`). The update tests compare the index's terms,
+by message id, with a rebuild's.
 
 The journal also records what servers keep outside the messages (mailbox
 hierarchy, order and subscription, per-account received dates, server

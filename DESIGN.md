@@ -975,7 +975,7 @@ segment bodies (for FTS), `incoming/`, `attachments/` and the journals.
 
 - `messages(id, location, segment, offset, frame_size, size, received, date,
   from_addr, to_addr, cc_addr, subject, message_id, in_reply_to, thread_id,
-  state)` —
+  state, body_read)` —
   `location` ∈ {segment, incoming} (segment if any record holds it; the
   first record of an id);
   `state` ∈ {live, dropped}, dropped only if it is in no segment and every
@@ -985,7 +985,8 @@ segment bodies (for FTS), `incoming/`, `attachments/` and the journals.
   taken as UTC); `message_id` and `in_reply_to` are the first `<id>`,
   without brackets (a bracketless one-word `Message-ID` counts too). For a
   message only in `incoming/`, `received` is the file's modification time.
-  `thread_id` is a thread number (see [Threads](#threads)).
+  `thread_id` is a thread number (see [Threads](#threads)). `body_read`
+  says whether the body pass has read the message.
 - `threads(message_id, thread)` — the thread of every id seen, a
   message's own or one it names (`<id>`, with the message's own id, for a
   message without a Message-ID).
@@ -1001,12 +1002,23 @@ segment bodies (for FTS), `incoming/`, `attachments/` and the journals.
 - `attachments(blob, file, kind, mime_type, size)` (the first record
   naming a blob gives its file and kind; `size` is the file's),
   `attachment_names(blob, msg, name)`. `mime_type` and the names come from
-  the part headers in the message bodies, so the body pass fills them.
+  the part headers in the message bodies, so the body pass fills them:
+  `mime_type` is the content type of the part in the first message read
+  that names the blob, and the names are each message's (decoded, without
+  control characters).
 - `segments(segment, indexed)` — how far each segment has been read: the
   next record not indexed starts at `indexed`.
-- `fts` — FTS5 over subject, addresses, body text (HTML converted to text),
-  and optionally attachment text (`attachment_text(blob, text)`, extracted
-  with external tools such as `pdftotext`, keyed by blob so it is done once).
+- `fts(subject, from_addr, to_addr, cc_addr, body, attachments)` — FTS5,
+  one row per message read by the body pass, its `rowid` that of the
+  message in `messages`. `body` is the [message text](#message-text) and
+  that of each attached message, its first 1 MiB (characters) only;
+  `attachments` the names of every part with a file name, attached
+  messages' included, extracted or not. The table is contentless
+  (`content=''`, with `contentless_delete`): it holds the index, not a copy
+  of the text. Tokens are `unicode61` with diacritics removed, so `cafe`
+  finds `café`. Optionally attachment text (`attachment_text(blob, text)`,
+  extracted with external tools such as `pdftotext`, keyed by blob so it
+  is done once).
 
 `reindex` first makes a headers-only pass: record headers, each message's
 header block (only the start of each body frame is decompressed, up to the
@@ -1018,6 +1030,19 @@ may be one being written and is skipped with a warning; other damage is
 reported (non-zero exit status) and the records it hides are left out. A
 damaged body does not hide the records after it.
 
+The body pass then reads each message not read yet, in the order they
+were indexed, for `fts` and the attachments' types and names. A record's
+stripped message is enough: body parts are never extracted, and a stub
+replaces a part's body but keeps its headers, so no attachment file is
+read. A message only in `incoming/` is read from its file (that of the
+first account holding it); one promoted since is read again from its
+record. The pass commits every 200 messages rather than in one
+transaction, so that it does not keep a writer (ingest bringing its
+catalog up to date) waiting long, and one that is interrupted goes on
+where it stopped; while it runs, a reader can see an index whose search
+is not complete. A message whose body cannot be read is reported once and
+counts as read: its headers are indexed but it is not searchable.
+
 Commands that use the index first bring it up to date, also in one
 transaction. Segments are append-only, so the records after `indexed` are
 read (the same pass as `reindex`, a torn record at the end skipped); a
@@ -1026,7 +1051,9 @@ The index is rebuilt instead if it has never read a segment, or if a
 segment it read is gone or shorter than `indexed` (a store changed by
 something other than geniza). Damage in a header is met, and reported, at
 every update until a `reindex`; a damaged body only at the update that
-reads its record, which is left out. The first record of an id or blob is
+reads its record, which is left out. Only commands that search run the
+body pass after the update (`show` and ingest do not need it). The first
+record of an id or blob is
 the first one indexed, which while a store is being initialized can be in
 a later segment than another copy: both are valid. Journals and
 `incoming/` are only read by a rebuild for now (incremental updates for
@@ -1036,7 +1063,8 @@ store holds from the updated index.
 The schema has a version (`PRAGMA user_version`); an index of another
 version is emptied and rebuilt, never migrated.
 
-SQLite with FTS5 is required; its availability is checked at startup.
+SQLite with FTS5 is required; it is checked whenever the index is opened,
+and a configuration error if missing.
 
 ### Message text
 

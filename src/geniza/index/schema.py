@@ -8,10 +8,13 @@ emptied and built again, never migrated.
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from functools import cache
 from pathlib import Path
 
+from geniza.config import ConfigError
+
 INDEX_FILE = "index.sqlite"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 #: Run one statement at a time, split at ";": comments must not hold one.
 SCHEMA = """
@@ -31,8 +34,11 @@ CREATE TABLE messages (
     message_id TEXT,
     in_reply_to TEXT,
     thread_id INTEGER,
-    state TEXT NOT NULL CHECK (state IN ('live', 'dropped'))
+    state TEXT NOT NULL CHECK (state IN ('live', 'dropped')),
+    -- Whether the body pass has read it (fts, attachment types and names).
+    body_read INTEGER NOT NULL DEFAULT 0
 );
+CREATE INDEX messages_body_read ON messages (body_read);
 CREATE INDEX messages_message_id ON messages (message_id);
 CREATE INDEX messages_date ON messages (date);
 CREATE INDEX messages_thread_id ON messages (thread_id);
@@ -107,6 +113,14 @@ CREATE TABLE segments (
     indexed INTEGER NOT NULL
 ) WITHOUT ROWID;
 
+-- Full-text search, one row per message read by the body pass (rowid:
+-- messages.rowid). Contentless: the text is not kept, only the index.
+CREATE VIRTUAL TABLE fts USING fts5 (
+    subject, from_addr, to_addr, cc_addr, body, attachments,
+    content = '', contentless_delete = 1,
+    tokenize = 'unicode61 remove_diacritics 2'
+);
+
 -- The last journal event applied, per account.
 CREATE TABLE accounts (
     account TEXT PRIMARY KEY,
@@ -118,7 +132,9 @@ CREATE TABLE accounts (
 def connect(path: Path) -> sqlite3.Connection:
     """Open the index at ``path``, creating it if needed. An index of
     another schema version is emptied, as if it were new. Transactions are
-    explicit (``transaction``)."""
+    explicit (``transaction``). Raises ``ConfigError`` if SQLite has no
+    FTS5."""
+    check_fts5()
     conn = sqlite3.connect(path, autocommit=True)
     try:
         conn.execute("PRAGMA journal_mode = WAL")
@@ -132,14 +148,29 @@ def connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
+@cache
+def check_fts5() -> None:
+    """Raise ``ConfigError`` if this SQLite cannot make FTS5 tables."""
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.execute("CREATE VIRTUAL TABLE t USING fts5 (x)")
+    except sqlite3.OperationalError:
+        raise ConfigError(
+            f"SQLite {sqlite3.sqlite_version} has no FTS5, which the index needs"
+        ) from None
+    finally:
+        conn.close()
+
+
 def create(conn: sqlite3.Connection) -> None:
     """Drop everything in the index and create empty tables, inside the
     caller's transaction."""
+    # Virtual tables first: dropping one drops its shadow tables.
     for (name,) in conn.execute(
         "SELECT name FROM sqlite_schema WHERE type = 'table'"
-        " AND name NOT LIKE 'sqlite_%'"
+        " AND name NOT LIKE 'sqlite_%' ORDER BY sql LIKE 'CREATE VIRTUAL%' DESC"
     ).fetchall():
-        conn.execute(f'DROP TABLE "{name}"')
+        conn.execute(f'DROP TABLE IF EXISTS "{name}"')
     for statement in SCHEMA.split(";"):
         if statement.strip():
             conn.execute(statement)
