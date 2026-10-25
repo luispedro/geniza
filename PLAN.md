@@ -245,11 +245,16 @@ existed; `init_store` now always removes them. M8 adds `sync.json` (step
 **Done when:** deleting `cache/` and running `reindex` reproduces the same
 search results as the incrementally maintained index.
 
-Progress: `index/schema.py` (all tables but `fts` and `server_threads`,
-which cannot be rebuilt from the store yet; DESIGN.md, "Open questions")
-and `reindex`'s headers-only pass, which fills messages, `incoming`,
+Progress: `index/schema.py` (all tables but `fts`) and `reindex`'s headers-only pass, which fills messages, `incoming`,
 attachment files (without MIME types and names, which need the body pass),
-mailboxes, membership, current flags and each account's last `seq`.
+mailboxes (with their hierarchy), membership (with the server's received
+dates and thread ids), current flags and each account's last `seq`.
+
+The journal also records what servers keep outside the messages (mailbox
+hierarchy, order and subscription, per-account received dates, server
+thread ids, other server properties verbatim as `props`, and account
+settings), so that the store is enough to rebuild an account. Format 1
+was amended for this rather than bumped: no store had journal events yet.
 
 ### M7 — Incoming
 
@@ -279,6 +284,12 @@ server is tested.
 - Session discovery, `Mailbox/get`/`changes`, `Email/changes`, `Email/get`
   in `maxObjectsInGet` batches, streamed blob downloads, the
   `cannotCalculateChanges` fallback.
+- Server metadata into the journal (DESIGN.md, "State: the journal"):
+  mailbox `parent`/`sort`/`subscribed`, `received` and `thread` on `add`,
+  `props` for other non-derived properties, and `setting` events for
+  identities, Sieve scripts and the vacation response. Check first which
+  of these Fastmail offers, under which token scopes, and which Fastmail
+  extension properties exist.
 - **Secrets first**, since this is the first code that needs one
   (DESIGN.md, "Secrets"):
   - `sshcrypt.py`: a reimplementation of the standalone `sshcrypt.py` as a

@@ -263,9 +263,9 @@ def test_reindex_journal_state(store: Path, cache: Path) -> None:
     w = JournalWriter(store, "work", clock=lambda: T0)
     w.append(
         [
-            Mbox(mbox="m1", name="INBOX", role="inbox"),
-            Mbox(mbox="m2", name="Archive"),
-            Add(msg=a, mbox="m1", rid="e1", eid="E1"),
+            Mbox(mbox="m1", name="INBOX", role="inbox", sort=1, subscribed=True),
+            Mbox(mbox="m2", name="Archive", parent="m1", props={"x": [1]}),
+            Add(msg=a, mbox="m1", rid="e1", eid="E1", received=T0, thread="T1"),
             Flags(msg=a, mbox="m1", set=frozenset({"$seen", "$flagged"})),
             Add(msg=b, mbox="m1", rid="e2"),
             Flags(msg=b, mbox="m1", set=frozenset({"$seen"})),
@@ -285,16 +285,16 @@ def test_reindex_journal_state(store: Path, cache: Path) -> None:
         ("work", 10),
     ]
     assert query(cache, "SELECT * FROM mailboxes ORDER BY account, mbox") == [
-        ("home", "INBOX", "INBOX", None),
-        ("work", "m1", "INBOX", "inbox"),
-        ("work", "m2", "Archive", None),
+        ("home", "INBOX", "INBOX", None, None, None, None),
+        ("work", "m1", "INBOX", "inbox", None, 1, 1),
+        ("work", "m2", "Archive", None, "m1", None, None),
     ]
     assert sorted(query(cache, "SELECT * FROM membership")) == sorted(
         [
-            ("home", "INBOX", a, "7"),
-            ("work", "m1", a, "e1"),
-            ("work", "m1", b, "e2"),
-            ("work", "m2", b, "e2"),
+            ("home", "INBOX", a, "7", None, None),
+            ("work", "m1", a, "e1", "2026-10-23T14:02:11Z", "T1"),
+            ("work", "m1", b, "e2", None, None),
+            ("work", "m2", b, "e2", None, None),
         ]
     )
     # c left m2, so its flags there are not current.

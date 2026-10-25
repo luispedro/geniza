@@ -11,8 +11,9 @@ from contextlib import contextmanager
 from pathlib import Path
 
 INDEX_FILE = "index.sqlite"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
+#: Run one statement at a time, split at ";": comments must not hold one.
 SCHEMA = """
 CREATE TABLE messages (
     id TEXT NOT NULL UNIQUE,
@@ -48,6 +49,9 @@ CREATE TABLE mailboxes (
     mbox TEXT NOT NULL,
     name TEXT NOT NULL,
     role TEXT,
+    parent TEXT,
+    sort INTEGER,
+    subscribed INTEGER,
     PRIMARY KEY (account, mbox)
 ) WITHOUT ROWID;
 
@@ -56,6 +60,9 @@ CREATE TABLE membership (
     mbox TEXT NOT NULL,
     msg TEXT NOT NULL,
     rid TEXT NOT NULL,
+    -- As the server gave them (server thread ids are hints only).
+    received TEXT,
+    thread TEXT,
     PRIMARY KEY (account, mbox, rid)
 ) WITHOUT ROWID;
 CREATE INDEX membership_msg ON membership (msg);

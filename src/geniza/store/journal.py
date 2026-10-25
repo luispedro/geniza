@@ -66,6 +66,8 @@ class Event:
                 continue
             if isinstance(value, frozenset):
                 value = sorted(value)
+            elif isinstance(value, datetime):
+                value = format_time(value)
             obj[f.name] = value
         return obj
 
@@ -106,6 +108,16 @@ _KINDS = {
     "uidvalidity": "int",
     "segment": "str",
     "offset": "int",
+    "parent": "str",
+    "sort": "int",
+    "subscribed": "bool",
+    "props": "object",
+    "received": "time",
+    "thread": "str",
+    "type": "str",
+    "id": "str",
+    "value": "object",
+    "content": "text",
 }
 
 
@@ -122,6 +134,14 @@ def _field(obj: dict[str, Any], key: str, *, optional: bool) -> Any:
             return value
         case "int" if type(value) is int and value >= 0:
             return value
+        case "bool" if type(value) is bool:
+            return value
+        case "text" if isinstance(value, str):
+            return value
+        case "object" if isinstance(value, dict):
+            return value
+        case "time" if isinstance(value, str):
+            return parse_time(value)
         case "flags" if isinstance(value, list) and all(
             isinstance(v, str) for v in value
         ):
@@ -131,12 +151,19 @@ def _field(obj: dict[str, Any], key: str, *, optional: bool) -> Any:
 
 @dataclass(frozen=True, kw_only=True)
 class Mbox(Event):
-    """The name and role of the mailbox with key ``mbox``."""
+    """Everything known about the mailbox with key ``mbox``: what a field
+    leaves out is unknown or unset, not unchanged."""
 
     op = "mbox"
     mbox: str
     name: str
     role: str | None = None
+    #: The key of the parent mailbox; None at the top level.
+    parent: str | None = None
+    sort: int | None = None
+    subscribed: bool | None = None
+    #: The server's other properties of the mailbox, verbatim.
+    props: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -146,6 +173,37 @@ class Add(Event):
     mbox: str
     rid: str
     eid: str | None = None
+    #: When the server received the message (JMAP ``receivedAt``, IMAP
+    #: ``INTERNALDATE``), in this account.
+    received: datetime | None = None
+    #: The server's thread id, a hint only.
+    thread: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class Props(Event):
+    """The server's other properties of the remote message ``rid`` (in
+    ``mbox``, where remote ids are scoped by mailbox), verbatim; the full
+    set, never a diff."""
+
+    op = "props"
+    msg: str
+    mbox: str | None = None
+    rid: str
+    props: dict[str, Any]
+
+
+@dataclass(frozen=True, kw_only=True)
+class Setting(Event):
+    """An account setting object (``type`` is its JMAP type name, such as
+    ``Identity``), verbatim; without ``value``, the object is gone. A Sieve
+    script's text is in ``content``."""
+
+    op = "setting"
+    type: str
+    id: str
+    value: dict[str, Any] | None = None
+    content: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -202,7 +260,20 @@ class Purge(Event):
 
 
 EVENTS: dict[str, type[Event]] = {
-    k.op: k for k in (Mbox, Add, Flags, Remove, Reset, Promote, Drop, Undrop, Purge)
+    k.op: k
+    for k in (
+        Mbox,
+        Add,
+        Flags,
+        Props,
+        Remove,
+        Reset,
+        Promote,
+        Drop,
+        Undrop,
+        Purge,
+        Setting,
+    )
 }
 
 
@@ -227,8 +298,20 @@ def decode_line(line: bytes) -> Event:
 class Mailbox:
     name: str
     role: str | None = None
+    parent: str | None = None
+    sort: int | None = None
+    subscribed: bool | None = None
+    props: dict[str, Any] | None = None
     #: The UIDVALIDITY its remote ids are scoped by, once one was reset.
     uidvalidity: int | None = None
+
+
+@dataclass(frozen=True)
+class Placed:
+    """What the server says about a message at (mbox, rid)."""
+
+    received: datetime | None = None
+    thread: str | None = None
 
 
 @dataclass(frozen=True)
@@ -252,6 +335,8 @@ class State:
     contents: dict[str, dict[str, str]] = field(default_factory=dict)
     #: msg → mbox → rids; the inverse of ``contents``.
     places: dict[str, dict[str, set[str]]] = field(default_factory=dict)
+    #: (mbox, rid) → what the ``add`` said, for every entry of ``contents``.
+    placed: dict[tuple[str, str], Placed] = field(default_factory=dict)
     #: (msg, mbox) → the last flag set journaled, kept when the message
     #: leaves the mailbox (clearing it would depend on the order of events);
     #: use ``flags_of``.
@@ -260,20 +345,40 @@ class State:
     eids: dict[str, str] = field(default_factory=dict)
     #: msg → fate; a message held in ``incoming/`` has none.
     fates: dict[str, Fate] = field(default_factory=dict)
+    #: (mbox or None, rid) → the server's other properties; like ``flags``,
+    #: kept when the message goes, so readers check that it is still there.
+    props: dict[tuple[str | None, str], dict[str, Any]] = field(default_factory=dict)
+    #: (type, id) → (value, content) of each setting object.
+    settings: dict[tuple[str, str], tuple[dict[str, Any], str | None]] = field(
+        default_factory=dict
+    )
 
     def apply(self, event: Event) -> None:
         match event:
-            case Mbox(mbox=mbox, name=name, role=role):
+            case Mbox(mbox=mbox, name=name):
                 box = self.mailboxes.setdefault(mbox, Mailbox(name))
-                box.name, box.role = name, role
+                box.name, box.role = name, event.role
+                box.parent, box.sort = event.parent, event.sort
+                box.subscribed, box.props = event.subscribed, event.props
             case Add(msg=msg, mbox=mbox, rid=rid, eid=eid):
                 self._unplace(mbox, rid)
                 self.contents.setdefault(mbox, {})[rid] = msg
                 self.places.setdefault(msg, {}).setdefault(mbox, set()).add(rid)
+                self.placed[mbox, rid] = Placed(event.received, event.thread)
                 if eid is not None:
                     self.eids[eid] = msg
             case Flags(msg=msg, mbox=mbox, set=flags):
                 self.flags[msg, mbox] = flags
+            case Props(mbox=mbox, rid=rid, props=props):
+                if props:
+                    self.props[mbox, rid] = props
+                else:
+                    self.props.pop((mbox, rid), None)
+            case Setting(type=type_, id=id_, value=value, content=content):
+                if value is None:
+                    self.settings.pop((type_, id_), None)
+                else:
+                    self.settings[type_, id_] = (value, content)
             case Remove(mbox=mbox, rid=rid):
                 self._unplace(mbox, rid)
             case Reset(mbox=mbox, uidvalidity=uidvalidity):
@@ -281,6 +386,8 @@ class State:
                     self._unplace(mbox, rid)
                 for key in [k for k in self.flags if k[1] == mbox]:
                     del self.flags[key]
+                for pkey in [k for k in self.props if k[0] == mbox]:
+                    del self.props[pkey]
                 self.mailboxes.setdefault(mbox, Mailbox(mbox)).uidvalidity = uidvalidity
             case Promote(msg=msg, ts=ts, segment=segment, offset=offset):
                 self.fates[msg] = Fate("promoted", ts, segment, offset)
@@ -304,6 +411,7 @@ class State:
         msg = self.contents.get(mbox, {}).pop(rid, None)
         if msg is None:
             return
+        del self.placed[mbox, rid]
         if not self.contents[mbox]:
             del self.contents[mbox]
         rids = self.places[msg][mbox]

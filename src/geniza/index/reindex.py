@@ -222,15 +222,21 @@ def _state(conn: sqlite3.Connection, account: str, state: State) -> None:
         "INSERT INTO accounts (account, seq) VALUES (?, ?)", (account, state.seq)
     )
     conn.executemany(
-        "INSERT INTO mailboxes (account, mbox, name, role) VALUES (?, ?, ?, ?)",
-        [(account, k, b.name, b.role) for k, b in state.mailboxes.items()],
+        "INSERT INTO mailboxes (account, mbox, name, role, parent, sort, subscribed)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            (account, k, b.name, b.role, b.parent, b.sort, b.subscribed)
+            for k, b in state.mailboxes.items()
+        ],
     )
     conn.executemany(
-        "INSERT INTO membership (account, mbox, msg, rid) VALUES (?, ?, ?, ?)",
+        "INSERT INTO membership (account, mbox, msg, rid, received, thread)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
         [
-            (account, mbox, msg, rid)
+            (account, mbox, msg, rid, _time(placed.received), placed.thread)
             for mbox, contents in state.contents.items()
             for rid, msg in contents.items()
+            for placed in [state.placed[mbox, rid]]
         ],
     )
     conn.executemany(
@@ -242,6 +248,10 @@ def _state(conn: sqlite3.Connection, account: str, state: State) -> None:
             for flag in sorted(state.flags.get((msg, mbox), ()))
         ],
     )
+
+
+def _time(t: datetime | None) -> str | None:
+    return None if t is None else format_time(t)
 
 
 def reindex(store: Path, cache: Path) -> Report:

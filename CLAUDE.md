@@ -52,7 +52,10 @@ silently diverging.
 - **The cache is disposable.** Anything in `cache/` must be rebuildable by
   `geniza reindex`; nothing may be stored only there.
 - **Format changes** to segments, journal events, `store.toml` or attachment
-  naming need a format version bump and a `DESIGN.md` update.
+  naming need a format version bump and a `DESIGN.md` update. Until the
+  first release, format 1 may be amended in place instead, if no store
+  could hold the changed data yet (the user decided this for the journal
+  metadata fields); say so in the commit.
 - **No unverified matches.** Prefer an extra download over assuming two
   messages are the same (see "Message matching" in `DESIGN.md`); a wrong
   match is silent data loss.

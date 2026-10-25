@@ -699,16 +699,26 @@ Per account, append-only JSONL, one file per month, `fsync`ed after each
 sync batch. Each line is one event:
 
 ```json
-{"seq": 1041, "ts": "2026-10-24T09:00:03Z", "op": "mbox", "mbox": "INBOX", "name": "INBOX", "role": "inbox"}
-{"seq": 1042, "ts": "…", "op": "add",     "msg": "sha256:…", "mbox": "INBOX", "rid": "1234", "eid": "M6d99ac3275bb4e"}
+{"seq": 1040, "ts": "2026-10-24T09:00:03Z", "op": "mbox", "mbox": "INBOX", "name": "INBOX", "role": "inbox", "sort": 1, "subscribed": true}
+{"seq": 1041, "ts": "…", "op": "mbox",    "mbox": "P2f", "name": "2020", "parent": "P1a", "props": {"x-color": "#3a7"}}
+{"seq": 1042, "ts": "…", "op": "add",     "msg": "sha256:…", "mbox": "INBOX", "rid": "1234", "eid": "M6d99ac3275bb4e", "received": "2026-10-24T08:59:40Z", "thread": "T5a0c2"}
 {"seq": 1043, "ts": "…", "op": "flags",   "msg": "sha256:…", "mbox": "INBOX", "set": ["\\Seen", "$label1"]}
-{"seq": 1044, "ts": "…", "op": "remove",  "msg": "sha256:…", "mbox": "INBOX", "rid": "1234"}
-{"seq": 1045, "ts": "…", "op": "reset",   "mbox": "INBOX", "uidvalidity": 99}
-{"seq": 1046, "ts": "…", "op": "promote", "msg": "sha256:…", "segment": "segments/2026/2026-10.zst", "offset": 81920}
-{"seq": 1047, "ts": "…", "op": "drop",    "msg": "sha256:…"}
-{"seq": 1048, "ts": "…", "op": "undrop",  "msg": "sha256:…"}
-{"seq": 1049, "ts": "…", "op": "purge",   "msg": "sha256:…"}
+{"seq": 1044, "ts": "…", "op": "props",   "msg": "sha256:…", "rid": "M6d99ac3275bb4e", "props": {"snoozed": {"until": "2026-11-01T08:00:00Z"}}}
+{"seq": 1045, "ts": "…", "op": "remove",  "msg": "sha256:…", "mbox": "INBOX", "rid": "1234"}
+{"seq": 1046, "ts": "…", "op": "reset",   "mbox": "INBOX", "uidvalidity": 99}
+{"seq": 1047, "ts": "…", "op": "promote", "msg": "sha256:…", "segment": "segments/2026/2026-10.zst", "offset": 81920}
+{"seq": 1048, "ts": "…", "op": "drop",    "msg": "sha256:…"}
+{"seq": 1049, "ts": "…", "op": "undrop",  "msg": "sha256:…"}
+{"seq": 1050, "ts": "…", "op": "purge",   "msg": "sha256:…"}
+{"seq": 1051, "ts": "…", "op": "setting", "type": "SieveScript", "id": "S1", "value": {"id": "S1", "name": "main", "blobId": "…", "isActive": true}, "content": "require \"fileinto\";\n…"}
+{"seq": 1052, "ts": "…", "op": "setting", "type": "Identity", "id": "I2"}
 ```
+
+The journal is meant to hold everything the server knows about the
+account's mail that the messages themselves do not: with the segments it
+is enough to rebuild the account elsewhere (folder tree, flags, received
+dates, settings), except for what a server always assigns itself (ids,
+threads).
 
 - `mbox` is an account-local mailbox key: the name for IMAP, the mailbox id
   for JMAP (with `mbox` events mapping ids to names and roles).
@@ -717,12 +727,40 @@ sync batch. Each line is one event:
 - `eid` is the server's stable, account-wide message id when it has one
   (JMAP `emailId`, IMAP `EMAILID`, Gmail `X-GM-MSGID`); see
   [Message matching](#message-matching). Absent otherwise.
+- `mbox` events describe a mailbox in full: `name` (for JMAP, the name
+  within its parent; for IMAP, the full name), `role`, `parent` (the key
+  of the parent mailbox: JMAP `parentId`, or for IMAP the name up to the
+  last hierarchy delimiter; absent at the top level), `sort` (JMAP
+  `sortOrder`), `subscribed` (JMAP `isSubscribed`, IMAP `LSUB`), and
+  `props`. A field that is absent is unknown or unset, not unchanged.
+- `add` also carries what the server says about the message at that
+  place: `received` (JMAP `receivedAt`, IMAP `INTERNALDATE`, per account
+  and, for IMAP, per mailbox; the record header's `received` is only the
+  first account's) and `thread` (JMAP `threadId`, IMAP `THREADID`, Gmail
+  `X-GM-THRID`). Server thread ids are hints: threads are computed locally
+  (see [Threads](#threads)), and a server assigns its own on import.
+- `props` holds the server's other properties of a mailbox (in `mbox`
+  events) or of a remote message (`props` events, keyed by `rid`, and by
+  `mbox` where remote ids are scoped by mailbox), verbatim as JSON: any
+  property geniza does not record in a named field or derive from the
+  message (headers, body structure, previews), such as extensions it does
+  not know. Properties that change without the object changing (JMAP
+  mailbox counters such as `totalEmails`) are left out, or every sync
+  would journal them. A `props` event carries the full set, like `flags`;
+  an empty set clears it, and it is written only when the set changed.
+- `setting` events hold the account's settings, one object each:
+  `type` is its JMAP type name (`Identity`, `SieveScript`,
+  `VacationResponse`), `value` the object verbatim, and for a Sieve script
+  `content` its text. Without `value`, the object is gone. A `setting`
+  event is written when an object is new or differs from the journaled
+  one (see [JMAP](#jmap)).
 - `flags` always carries the **full** flag/keyword set, never a diff, so
   replay is idempotent.
 - Every event assigns a value without looking at what was there before:
-  `add`/`remove` set or clear the message at (`mbox`, `rid`); `flags` sets
-  the flags of (`msg`, `mbox`); `reset` voids every `rid` and flag set of
-  its mailbox; `promote`/`drop`/`purge` set a message's fate in the
+  `mbox` sets a mailbox; `add`/`remove` set or clear the message at
+  (`mbox`, `rid`); `flags` sets the flags of (`msg`, `mbox`); `props` the
+  properties of (`mbox`, `rid`); `setting` sets or clears a setting
+  object; `reset` voids every `rid`, flag set and `props` of its mailbox; `promote`/`drop`/`purge` set a message's fate in the
   account's `incoming/` and `undrop` clears it. Replaying events that were
   already applied (twice, or re-derived after a crash) changes nothing.
 - Fates are per account, like `incoming/`: a message can be dropped from
@@ -731,7 +769,8 @@ sync batch. Each line is one event:
   mailbox share one set. They are not cleared when the message leaves the
   mailbox (that would make the result depend on event order); readers
   ignore flags of a message that is not there, and a sync writes a `flags`
-  event with every `add`.
+  event with every `add`. The same holds for `props` of a remote id that
+  is gone.
 - An `eid` keeps pointing to its message after the message is removed.
 - `seq` starts at 1 and increases by one per event across all files of
   the account. Events are written in batches; a batch shares one `ts` and
@@ -814,8 +853,9 @@ Not in the first release.
    when supported). If UIDVALIDITY changed, journal `reset` and treat every
    message as new (deduplication avoids downloads).
 2. **New messages:** `UID FETCH <uidnext>:* (UID RFC822.SIZE INTERNALDATE FLAGS
-   BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])`, plus `EMAILID` or `X-GM-MSGID`
-   when available. Match against stored messages as described in
+   BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])`, plus `EMAILID` and `THREADID`
+   or `X-GM-MSGID` and `X-GM-THRID` when available (`add` carries
+   `INTERNALDATE` as `received` and the thread id as `thread`). Match against stored messages as described in
    [Message matching](#message-matching); download with `BODY.PEEK[]` and
    ingest only what does not match.
 3. **Flag changes:** `UID FETCH 1:* (FLAGS) (CHANGEDSINCE <modseq>)` with
@@ -827,19 +867,32 @@ membership and use `X-GM-MSGID` as the remote id.
 
 ### JMAP
 
-Authentication is a Bearer API token (Fastmail's API tokens; a read-only
-token with only the Email scope is enough and recommended). Limits such as
-`maxObjectsInGet` come from the session object, never hard-coded.
+Authentication is a Bearer API token (Fastmail's API tokens). A
+read-only token with the Email scope is enough for mail; settings need
+the scopes of their capabilities, and are skipped (reported at `-v`) when
+the session does not offer them. Limits such as `maxObjectsInGet` come
+from the session object, never hard-coded.
 
-1. Fetch the session; `Mailbox/changes` (or `Mailbox/get` initially) → `mbox` events.
+1. Fetch the session; `Mailbox/changes` (or `Mailbox/get` initially) →
+   `mbox` events (`name`, `parentId`, `role`, `sortOrder`, `isSubscribed`;
+   other properties into `props`, without the counters).
 2. `Email/changes` since `email_state` (fall back to a full `Email/query` on
    `cannotCalculateChanges`).
 3. `Email/get` on created and updated ids with
-   `[blobId, mailboxIds, keywords, receivedAt, size, messageId]`, batched
-   by `maxObjectsInGet`.
+   `[blobId, threadId, mailboxIds, keywords, receivedAt, size, messageId]`,
+   plus the properties of extensions the session offers that are not
+   derived from the message, batched by `maxObjectsInGet`.
 4. Download raw blobs for unseen messages and ingest; emit
-   `add`/`remove`/`flags` events from the `mailboxIds`/`keywords` diff.
-   Destroyed ids → `remove` from every mailbox.
+   `add`/`remove`/`flags` events from the `mailboxIds`/`keywords` diff
+   (`add` with `receivedAt` and `threadId`), and `props` events when other
+   properties changed. Destroyed ids → `remove` from every mailbox.
+5. Settings, each when the session has its capability: `Identity/get`
+   (`urn:ietf:params:jmap:submission`), `SieveScript/get` and the scripts'
+   blobs (`urn:ietf:params:jmap:sieve`), `VacationResponse/get`
+   (`urn:ietf:params:jmap:vacationresponse`). Each object that is new or
+   differs from the replayed journal → `setting`; each journaled object
+   the server no longer has → `setting` without `value`. Which of these
+   Fastmail offers, and to which token scopes, is to be checked in M8.
 
 JMAP state strings are atomic, so the IMAP move race does not arise; the
 two-run drop rule is applied uniformly anyway.
@@ -922,16 +975,17 @@ segment bodies (for FTS), `incoming/`, `attachments/` and the journals.
   message only in `incoming/`, `received` is the file's modification time.
 - `incoming(account, msg, state)` — one row per `incoming/<account>/` file;
   `state` ∈ {held, promoted, dropped, purged}, from the account's journal.
-- `membership(account, mbox, msg, rid)`, `flags(account, mbox, msg, flag)`
-  (current flags only: those of a message in a mailbox it is in).
-- `mailboxes(account, mbox, name, role)`; `accounts(account, seq)`, the
-  last journal event applied.
+- `membership(account, mbox, msg, rid, received, thread)` (`received` and
+  `thread` as the server gave them: the server thread ids are hints only),
+  `flags(account, mbox, msg, flag)` (current flags only: those of a
+  message in a mailbox it is in).
+- `mailboxes(account, mbox, name, role, parent, sort, subscribed)`;
+  `accounts(account, seq)`, the last journal event applied. `props` and
+  settings are not indexed.
 - `attachments(blob, file, kind, mime_type, size)` (the first record
   naming a blob gives its file and kind; `size` is the file's),
   `attachment_names(blob, msg, name)`. `mime_type` and the names come from
   the part headers in the message bodies, so the body pass fills them.
-- `server_threads(account, msg, thread_id)` — JMAP `threadId` / Gmail
-  `X-GM-THRID`, kept as hints only. Not built yet: see "Open questions".
 - `fts` — FTS5 over subject, addresses, body text (HTML converted to text),
   and optionally attachment text (`attachment_text(blob, text)`, extracted
   with external tools such as `pdftotext`, keyed by blob so it is done once).
@@ -1067,11 +1121,6 @@ repeat. It is meant to be written early, to set the defaults from real mail.
   lines alternating 64 and 8 characters), which runs cannot express.
   They stay copy unless the pattern turns out to be common.
 
-- `server_threads` cannot be rebuilt from the store as it stands: no
-  journal event carries a server thread id, and the cache must hold
-  nothing that only it has. Either `add` gains an optional thread id
-  field (a journal format change) or server threads are dropped. To be
-  decided with M8.
 
 ## Not planned (for now)
 

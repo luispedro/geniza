@@ -17,10 +17,13 @@ from geniza.store.journal import (
     JournalError,
     JournalWriter,
     Mbox,
+    Placed,
     Promote,
+    Props,
     Purge,
     Remove,
     Reset,
+    Setting,
     State,
     Undrop,
     decode_line,
@@ -48,12 +51,31 @@ msgs = st.sampled_from(["sha256:aa", "sha256:bb", "sha256:cc"])
 mboxes = st.sampled_from(["INBOX", "Archive", "Mlinkit"])
 rids = st.sampled_from(["1", "2", "3"])
 flag_sets = st.frozensets(st.sampled_from(["\\Seen", "\\Flagged", "$label1"]))
+# Server properties: any JSON object.
+json_values = st.recursive(
+    st.none() | st.booleans() | st.integers() | st.text(max_size=5),
+    lambda inner: (
+        st.lists(inner, max_size=3)
+        | st.dictionaries(st.text(max_size=5), inner, max_size=3)
+    ),
+    max_leaves=6,
+)
+json_objects = st.dictionaries(st.text(max_size=5), json_values, max_size=3)
+times = st.datetimes(
+    min_value=datetime(1990, 1, 1),
+    max_value=datetime(2030, 1, 1),
+    timezones=st.just(UTC),
+).map(lambda t: t.replace(microsecond=0))
 events = st.one_of(
     st.builds(
         Mbox,
         mbox=mboxes,
         name=st.text(min_size=1, max_size=5),
         role=st.none() | st.just("inbox"),
+        parent=st.none() | mboxes,
+        sort=st.none() | st.integers(0, 99),
+        subscribed=st.none() | st.booleans(),
+        props=st.none() | json_objects,
     ),
     st.builds(
         Add,
@@ -61,8 +83,18 @@ events = st.one_of(
         mbox=mboxes,
         rid=rids,
         eid=st.none() | st.sampled_from(["E1", "E2"]),
+        received=st.none() | times,
+        thread=st.none() | st.sampled_from(["T1", "T2"]),
     ),
     st.builds(Flags, msg=msgs, mbox=mboxes, set=flag_sets),
+    st.builds(Props, msg=msgs, mbox=st.none() | mboxes, rid=rids, props=json_objects),
+    st.builds(
+        Setting,
+        type=st.sampled_from(["Identity", "SieveScript"]),
+        id=st.sampled_from(["S1", "S2"]),
+        value=st.none() | json_objects,
+        content=st.none() | st.text(max_size=5),
+    ),
     st.builds(Remove, msg=msgs, mbox=mboxes, rid=rids),
     st.builds(Reset, mbox=mboxes, uidvalidity=st.integers(0, 3)),
     st.builds(
@@ -126,6 +158,10 @@ def test_state_invariants(evs: list[Event]) -> None:
         for rid, msg in contents.items():
             inverse.setdefault(msg, {}).setdefault(mbox, set()).add(rid)
     assert inverse == state.places
+    assert state.placed.keys() == {
+        (mbox, rid) for mbox, contents in state.contents.items() for rid in contents
+    }
+    assert all(state.props.values())
 
 
 @given(event_lists)
@@ -147,23 +183,27 @@ def test_design_examples_parse() -> None:
     )
     assert block
     lines = block[1].strip().splitlines()
-    assert len(lines) == 9
+    assert len(lines) == 13
     parsed = [
         decode_line(line.replace('"…"', '"2026-10-24T09:00:03Z"').encode())
         for line in lines
     ]
     assert [type(e) for e in parsed] == [
         Mbox,
+        Mbox,
         Add,
         Flags,
+        Props,
         Remove,
         Reset,
         Promote,
         Drop,
         Undrop,
         Purge,
+        Setting,
+        Setting,
     ]
-    assert parsed[2] == Flags(
+    assert parsed[3] == Flags(
         seq=1043,
         ts=T0,
         msg="sha256:…",
@@ -235,6 +275,37 @@ def test_state() -> None:
     assert state.mailboxes["INBOX"].role == "inbox"
     assert state.mailboxes["Archive"].uidvalidity == 99
     assert state.fates == {a: Fate("promoted", T0, "segments/2026/2026-10.zst", 0)}
+
+
+def test_state_of_server_metadata() -> None:
+    a = "sha256:aa"
+    t = datetime(2026, 10, 24, 8, 59, 40, tzinfo=UTC)
+    state = state_of(
+        stamp(
+            [
+                Mbox(mbox="P1", name="Archive", sort=3, props={"x": 1}),
+                Mbox(mbox="P2", name="2020", parent="P1", subscribed=True),
+                Add(msg=a, mbox="P2", rid="M1", received=t, thread="T1"),
+                Add(msg=a, mbox="P1", rid="M1"),
+                Props(msg=a, rid="M1", props={"snoozed": None}),
+                Setting(
+                    type="SieveScript", id="S1", value={"name": "x"}, content="keep;"
+                ),
+                Setting(type="Identity", id="I1", value={"email": "a@example.org"}),
+                Mbox(mbox="P1", name="Old"),
+                Setting(type="Identity", id="I1"),
+            ]
+        )
+    )
+    assert state.mailboxes["P2"].parent == "P1"
+    assert state.mailboxes["P2"].subscribed is True
+    # An mbox event says everything about the mailbox.
+    assert (state.mailboxes["P1"].sort, state.mailboxes["P1"].props) == (None, None)
+    assert state.placed == {("P2", "M1"): Placed(t, "T1"), ("P1", "M1"): Placed()}
+    assert state.props == {(None, "M1"): {"snoozed": None}}
+    assert state.settings == {("SieveScript", "S1"): ({"name": "x"}, "keep;")}
+    state.apply(replace(Props(msg=a, rid="M1", props={}), seq=10, ts=T0))
+    assert state.props == {}
 
 
 def test_readding_keeps_flags() -> None:
