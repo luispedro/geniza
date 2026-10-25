@@ -768,7 +768,7 @@ stays empty and is never rewritten; the kernel releases the lock when its
 holder exits, so a crash leaves no stale lock. A second writer fails at
 once with "store is in use" rather than waiting. Taking the lock creates
 the store directory if it is missing, so a new store's `store.toml` is
-written under the lock, by exactly one process. Readers (`search`, `show`, `export`, `verify`) do not lock.
+written under the lock, by exactly one process. Readers (`search`, `show`, `export`, `verify`, and `reindex`, which writes only the cache) do not lock.
 
 1. Attachment files: temp + `fsync` + `rename`.
 2. Segment record (or `incoming/` file): append/write + `fsync`.
@@ -909,20 +909,45 @@ could not be matched.
 segment bodies (for FTS), `incoming/`, `attachments/` and the journals.
 
 - `messages(id, location, segment, offset, frame_size, size, received, date,
-  from, to, cc, subject, message_id, in_reply_to, thread_id, state)` —
-  `location` ∈ {segment, incoming} (segment if any record holds it);
+  from_addr, to_addr, cc_addr, subject, message_id, in_reply_to, thread_id,
+  state)` —
+  `location` ∈ {segment, incoming} (segment if any record holds it; the
+  first record of an id);
   `state` ∈ {live, dropped}, dropped only if it is in no segment and every
-  account holding it in `incoming/` has dropped it.
-- `incoming(account, msg, state)` — one row per `incoming/<account>/` file.
-- `membership(account, mbox, msg, rid)`, `flags(account, msg, flag)`.
-- `mailboxes(account, mbox, name, role)`.
-- `attachments(blob, file, kind, mime_type, size)`,
-  `attachment_names(blob, msg, name)`.
+  account holding it in `incoming/` has dropped (or purged) it. Header
+  values are decoded (RFC 2047, unfolded, undecodable bytes replaced);
+  `date` is the first `Date` that parses, in UTC (one without a zone is
+  taken as UTC); `message_id` and `in_reply_to` are the first `<id>`,
+  without brackets (a bracketless one-word `Message-ID` counts too). For a
+  message only in `incoming/`, `received` is the file's modification time.
+- `incoming(account, msg, state)` — one row per `incoming/<account>/` file;
+  `state` ∈ {held, promoted, dropped, purged}, from the account's journal.
+- `membership(account, mbox, msg, rid)`, `flags(account, mbox, msg, flag)`
+  (current flags only: those of a message in a mailbox it is in).
+- `mailboxes(account, mbox, name, role)`; `accounts(account, seq)`, the
+  last journal event applied.
+- `attachments(blob, file, kind, mime_type, size)` (the first record
+  naming a blob gives its file and kind; `size` is the file's),
+  `attachment_names(blob, msg, name)`. `mime_type` and the names come from
+  the part headers in the message bodies, so the body pass fills them.
 - `server_threads(account, msg, thread_id)` — JMAP `threadId` / Gmail
-  `X-GM-THRID`, kept as hints only.
+  `X-GM-THRID`, kept as hints only. Not built yet: see "Open questions".
 - `fts` — FTS5 over subject, addresses, body text (HTML converted to text),
   and optionally attachment text (`attachment_text(blob, text)`, extracted
   with external tools such as `pdftotext`, keyed by blob so it is done once).
+
+`reindex` first makes a headers-only pass: record headers, each message's
+header block (only the start of each body frame is decompressed, up to the
+first blank line or 256 KiB), `incoming/` files, attachment file sizes and
+journal replay. The index is rebuilt in one SQLite transaction, so a
+reader sees the old index or the new one. Like other readers, `reindex`
+does not take the store lock: a record cut short at the end of a segment
+may be one being written and is skipped with a warning; other damage is
+reported (non-zero exit status) and the records it hides are left out. A
+damaged body does not hide the records after it.
+
+The schema has a version (`PRAGMA user_version`); an index of another
+version is emptied and rebuilt, never migrated.
 
 SQLite with FTS5 is required; its availability is checked at startup.
 
@@ -1041,6 +1066,12 @@ repeat. It is meant to be written early, to set the defaults from real mail.
   stub; the rest have periodic layouts (a blank line after every line;
   lines alternating 64 and 8 characters), which runs cannot express.
   They stay copy unless the pattern turns out to be common.
+
+- `server_threads` cannot be rebuilt from the store as it stands: no
+  journal event carries a server thread id, and the cache must hold
+  nothing that only it has. Either `add` gains an optional thread id
+  field (a journal format change) or server threads are dropped. To be
+  decided with M8.
 
 ## Not planned (for now)
 

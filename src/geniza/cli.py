@@ -73,6 +73,12 @@ def _cmd_verify(args: argparse.Namespace, out: Output) -> int:
     return verify.run(args, out)
 
 
+def _cmd_reindex(args: argparse.Namespace, out: Output) -> int:
+    from geniza.index import reindex
+
+    return reindex.run(args, out)
+
+
 def _cmd_import_local(args: argparse.Namespace, out: Output) -> int:
     from geniza import debug
 
@@ -168,7 +174,7 @@ def build_parser() -> argparse.ArgumentParser:
         " in .gz, .bz2, .xz, .zst or .zstd",
     )
 
-    add("reindex", "rebuild cache/ from store/")
+    add("reindex", "rebuild cache/ from store/", _cmd_reindex)
     add("verify", "re-hash messages and attachments", _cmd_verify)
 
     p = add("stats", "dry-run part classification on a Maildir or mbox", _cmd_stats)

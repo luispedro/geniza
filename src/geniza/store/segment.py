@@ -38,6 +38,11 @@ MAX_HEADER_SIZE = 16 * MiB
 
 FROM_LINE_PREFIX = b"From geniza "
 
+#: ``scan_heads`` decompresses bodies this many bytes at a time, and gives
+#: up looking for the end of a header block after ``HEAD_MAX`` bytes.
+HEAD_CHUNK = 16 * 1024
+HEAD_MAX = 256 * 1024
+
 _ESCAPE = re.compile(rb"^(>*From )", re.MULTILINE)
 _UNESCAPE = re.compile(rb"^>(>*From )", re.MULTILINE)
 _SEGMENT_NAME = re.compile(r"(\d{4})-(\d{2})(?:\.([1-9]\d*))?\.zst")
@@ -239,6 +244,68 @@ def scan(path: Path, start: int = 0) -> Iterator[tuple[int, Header]]:
             header, body_start = _read_header(f, path, offset, size)
             yield offset, header
             offset = body_start + header.frame_size
+
+
+def scan_heads(
+    path: Path, start: int = 0
+) -> Iterator[tuple[int, Header, bytes | SegmentError]]:
+    """Like ``scan``, also yielding the start of each stripped message: its
+    header block if that ends within ``HEAD_MAX`` bytes, else that many
+    bytes (or the whole message). Only as much of each body is decompressed
+    as that takes, so its checksum is not checked. A damaged body does not
+    hide the records after it: its error is yielded in place of the start."""
+    with open(path, "rb") as f:
+        size = os.fstat(f.fileno()).st_size
+        offset = start
+        while offset < size:
+            header, body_start = _read_header(f, path, offset, size)
+            f.seek(body_start)
+            head: bytes | SegmentError
+            try:
+                head = _head(f, header.frame_size)
+            except (ValueError, zstd.ZstdError) as e:
+                head = SegmentError(path, offset, f"bad body frame: {e}")
+            yield offset, header, head
+            offset = body_start + header.frame_size
+
+
+def header_end(data: bytes | bytearray) -> int | None:
+    """Where the first blank line of ``data`` ends, if it has one."""
+    ends = [i + len(s) for s in (b"\r\n\r\n", b"\n\n") if (i := data.find(s)) >= 0]
+    return min(ends, default=None)
+
+
+def _head(f: BinaryIO, frame_size: int) -> bytes:
+    d = zstd.ZstdDecompressor()
+    out = bytearray()
+    left = frame_size
+    # The From line is short; this leaves room for it.
+    while not d.eof and len(out) <= HEAD_MAX + 1024:
+        if d.needs_input:
+            chunk = f.read(min(HEAD_CHUNK, left))
+            if not chunk:
+                break
+            left -= len(chunk)
+        else:
+            chunk = b""
+        out += d.decompress(chunk, max_length=HEAD_CHUNK)
+        # A blank line at the very end may be the separator line.
+        if (end := header_end(out)) is not None and end < len(out):
+            break
+    if not out.startswith(FROM_LINE_PREFIX) or (nl := out.find(b"\n")) < 0:
+        raise ValueError("body is not an mboxrd entry")
+    body = bytes(out[nl + 1 :])
+    if d.eof:
+        if not body.endswith(b"\n"):
+            raise ValueError("body is not an mboxrd entry")
+        body = body[:-1]  # the separator line
+    end = header_end(body)
+    if end is not None and end <= HEAD_MAX:
+        body = body[:end]
+    elif not d.eof:
+        # Whole lines only, so that unescaping sees each line from its start.
+        body = body[: body.rfind(b"\n", 0, HEAD_MAX) + 1]
+    return unescape(body)
 
 
 def read(path: Path, offset: int) -> tuple[Header, bytes]:

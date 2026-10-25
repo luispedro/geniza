@@ -11,17 +11,20 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from geniza.store.segment import (
+    HEAD_MAX,
     SEGMENT_CAP,
     Header,
     SegmentError,
     SegmentWriter,
     encode_record,
     escape,
+    header_end,
     month_segments,
     read,
     records,
     recover,
     scan,
+    scan_heads,
     segment_name,
     segments,
     unescape,
@@ -303,3 +306,53 @@ def test_given_month(tmp_path: Path) -> None:
         assert stripped == m
         assert header.stored == T0
     assert [m for _, _, m in records(tmp_path / locs[0].segment)] == msgs[0:3:2]
+
+
+def expected_head(data: bytes) -> bytes:
+    end = header_end(data)
+    return data[:end] if end is not None and end <= HEAD_MAX else data
+
+
+@given(st.lists(messages, min_size=1, max_size=4))
+def test_scan_heads(
+    tmp_path_factory: pytest.TempPathFactory, msgs: list[bytes]
+) -> None:
+    store = tmp_path_factory.mktemp("store")
+    [(name, _), *_] = write(store, msgs)
+    heads = list(scan_heads(store / name))
+    assert [(o, h) for o, h, _ in heads] == list(scan(store / name))
+    assert [head for _, _, head in heads] == [expected_head(m) for m in msgs]
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b"A: b\n",  # the separator line is not a blank line of the message
+        b"A: b\n\n",
+        b"A: b\r\n\r\nbody\n" + b"x" * (3 * HEAD_MAX),
+        b"From: x\n" + b"X-Long: " + b"y" * (2 * HEAD_MAX) + b"\n\nbody\n",
+        b"A: b\n" * (HEAD_MAX // 4) + b"\nbody\n",
+    ],
+    ids=["no-body", "empty-body", "big-body", "long-line", "big-header"],
+)
+def test_scan_heads_limits(tmp_path: Path, data: bytes) -> None:
+    [(name, _)] = write(tmp_path, [data])
+    [(_, _, head)] = scan_heads(tmp_path / name)
+    assert isinstance(head, bytes)
+    assert data.startswith(head)
+    if (end := header_end(data)) is not None and end <= HEAD_MAX:
+        assert head == data[:end]
+    else:
+        assert len(head) <= HEAD_MAX and (not head or head.endswith(b"\n"))
+
+
+def test_scan_heads_damaged_body(tmp_path: Path) -> None:
+    msgs = [b"A: 1\n\nbody one\n" * 50, b"A: 2\n\nbody two\n"]
+    [(name, _), (_, second)] = write(tmp_path, msgs)
+    path = tmp_path / name
+    data = bytearray(path.read_bytes())
+    data[second - 8 : second - 4] = b"\xff" * 4  # inside the first body frame
+    path.write_bytes(data)
+    [(_, _, first_head), (offset, _, second_head)] = scan_heads(path)
+    assert isinstance(first_head, SegmentError)
+    assert (offset, second_head) == (second, b"A: 2\n\n")

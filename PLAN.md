@@ -14,7 +14,10 @@ design leaves open.
 - **M5 done.** Ingest, `debug import-local`, `show`, `export --mbox`
   and `verify` work, the "done when" run on real mail passed, and fault
   injection passes (see M5).
-- Next: M6.
+- **M6 in progress.** Done: the schema and `reindex`'s headers-only
+  pass (see M6). Next: the index replaces `ingest.Catalog.scan` and the
+  id lookup in `show`; then threading, body text and FTS, `search`, and
+  incremental updates.
 
 ## Tooling
 
@@ -72,8 +75,9 @@ src/geniza/
     parts.py            # record header part entries
     reader.py           # rebuild messages from records
   index/
-    schema.py
-    reindex.py
+    schema.py           # tables of cache/index.sqlite, schema version
+    envelope.py         # header fields the index keeps
+    reindex.py          # rebuild the index from the store
     search.py
     threads.py          # union-find threading
   sync/
@@ -240,6 +244,12 @@ existed; `init_store` now always removes them. M8 adds `sync.json` (step
 
 **Done when:** deleting `cache/` and running `reindex` reproduces the same
 search results as the incrementally maintained index.
+
+Progress: `index/schema.py` (all tables but `fts` and `server_threads`,
+which cannot be rebuilt from the store yet; DESIGN.md, "Open questions")
+and `reindex`'s headers-only pass, which fills messages, `incoming`,
+attachment files (without MIME types and names, which need the body pass),
+mailboxes, membership, current flags and each account's last `seq`.
 
 ### M7 — Incoming
 
