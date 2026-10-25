@@ -73,6 +73,7 @@ src/geniza/
     imap.py             # M9, after the first release
     matching.py         # stable ids and header-verified matching (M9)
   stats.py              # stats --parts
+  show.py               # show ID [--raw]
   export.py             # export --mbox
   verify.py             # verify
   debug.py              # debug import-local (development only)

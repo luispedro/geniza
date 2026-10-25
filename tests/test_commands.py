@@ -1,5 +1,7 @@
-"""``debug import-local``, ``export --mbox`` and ``verify``, through the CLI."""
+"""The store commands (import-local, export, verify, show) through the CLI."""
 
+import email
+import email.policy
 import json
 import mailbox
 import os
@@ -11,7 +13,7 @@ from types import ModuleType
 import pytest
 from conftest import corpus_files
 
-from geniza import cli
+from geniza import cli, show
 from geniza.debug import _from_date, received_date
 from geniza.store import attachments, reader, segment
 from geniza.store.attachments import AttachmentWriter
@@ -288,3 +290,73 @@ def test_commands_need_a_store(
     assert run(config, "export", "--mbox", tmp_path / "x.mbox") == 2
     assert not (tmp_path / "x.mbox").exists()
     assert run(tmp_path / "missing.toml", "verify") == 2
+
+
+def test_show_raw(
+    store: Path, config: Path, capsysbinary: pytest.CaptureFixture[bytes]
+) -> None:
+    capsysbinary.readouterr()
+    for data in MSGS[:5]:
+        id = message_id(data)
+        for query in (id, id.removeprefix("sha256:"), id[:20].upper()):
+            assert run(config, "show", "--raw", query) == 0
+            assert capsysbinary.readouterr().out == data
+
+
+def where(store: Path, id: str) -> tuple[str, int]:
+    """The segment and offset of the first record of ``id``."""
+    for path in segment.segments(store):
+        for offset, header in segment.scan(path):
+            if header.id == id:
+                return path.relative_to(store).as_posix(), offset
+    raise KeyError(id)
+
+
+def test_show_summary(
+    store: Path, config: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    capsys.readouterr()
+    with_parts = 0
+    for data in MSGS:
+        id = message_id(data)
+        assert run(config, "--json", "show", id) == 0
+        info = json.loads(capsys.readouterr().out)
+        assert info["id"] == id
+        assert info["size"] == len(data)
+        assert (info["segment"], info["offset"]) == where(store, id)
+        subject = email.message_from_bytes(data, policy=email.policy.default)["Subject"]
+        if subject is not None:
+            assert info["headers"]["Subject"] == [" ".join(str(subject).split())]
+        assert run(config, "show", id) == 0
+        out = capsys.readouterr().out
+        assert out.startswith(f"id: {id}\n")
+        for p in info["parts"]:
+            assert f"  {p['path']}: {p['kind']} {p['mode']} {p['file']}\n" in out
+        with_parts += bool(info["parts"])
+    assert with_parts > 0
+
+
+def test_show_errors(
+    store: Path,
+    config: Path,
+    capsysbinary: pytest.CaptureFixture[bytes],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ids = sorted(map(message_id, MSGS))
+    assert run(config, "show", "sha256:" + "0" * 64) == 1
+    assert "no such message" in capsysbinary.readouterr().err.decode()
+    # 36 ids over 16 first digits: some digit starts two of them.
+    monkeypatch.setattr(show, "MIN_PREFIX", 1)
+    first = [id.removeprefix("sha256:")[0] for id in ids]
+    shared = next(d for d in first if first.count(d) > 1)
+    assert run(config, "show", shared) == 1
+    assert "ambiguous" in capsysbinary.readouterr().err.decode()
+    monkeypatch.undo()
+    assert run(config, "show", "sha256:abc") == 2  # too short
+    assert run(config, "show", "xyz12345") == 2
+    assert run(config, "show", "--raw", "--json", ids[0]) == 2
+    # A missing attachment file stops the rebuild.
+    [(_, file), *_] = attachments.scan(store)
+    (store / file).unlink()
+    codes = {run(config, "show", "--raw", id) for id in ids}
+    assert codes == {0, 1}

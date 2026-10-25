@@ -55,6 +55,12 @@ def _cmd_stats(args: argparse.Namespace, out: Output) -> int:
     return stats.run(args, out)
 
 
+def _cmd_show(args: argparse.Namespace, out: Output) -> int:
+    from geniza import show
+
+    return show.run(args, out)
+
+
 def _cmd_export(args: argparse.Namespace, out: Output) -> int:
     from geniza import export
 
@@ -146,9 +152,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("search", "full-text search")
     p.add_argument("query", nargs="+", metavar="QUERY")
 
-    p = add("show", "reconstruct a message")
-    p.add_argument("id", metavar="ID")
-    p.add_argument("--raw", action="store_true")
+    p = add("show", "reconstruct a message", _cmd_show)
+    p.add_argument("id", metavar="ID", help="message id, or a prefix of its digest")
+    p.add_argument(
+        "--raw", action="store_true", help="write the original message to stdout"
+    )
 
     p = add("export", "export messages", _cmd_export)
     p.add_argument(

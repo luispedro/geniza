@@ -974,6 +974,17 @@ omitted when there is only one store or `default_store` is set. `sync`
 without arguments syncs every account of every store; with account names,
 only those (and only their stores are locked).
 
+`show ID` takes a message id (`sha256:…`) or a prefix of its hex digest,
+with or without `sha256:`, of at least 4 digits; a prefix that matches
+more than one message is an error that lists them. The message is rebuilt
+and checked against its id. With `--raw` it is written to stdout byte for
+byte; otherwise `show` prints a summary: the record's segment and offset,
+its received and stored times and sizes, the message's `From`, `To`,
+`Cc`, `Date`, `Subject` and `Message-ID`, and each extracted part with
+its kind, mode and file (`--json` gives the same as an object, with the
+parts as the record header has them). Until the index exists, the id is
+found by reading every segment header.
+
 `export --mbox PATH` writes every message of the store, rebuilt and
 checked against its id, to a new mboxrd file (`-` for stdout; an existing
 file is not overwritten), in store order and each message once, with the
