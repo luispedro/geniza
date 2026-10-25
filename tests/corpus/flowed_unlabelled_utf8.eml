@@ -1,0 +1,20 @@
+Received: from mx.example.org (mx.example.org [192.0.2.10])
+	by mail.example.net with ESMTPS id 4Xa9bC1d2Ez;
+	Thu, 22 Oct 2026 10:15:00 +0000
+From: Alice Example <alice@example.org>
+To: Bob Example <bob@example.net>
+Subject: Flowed
+Date: Thu, 22 Oct 2026 10:15:00 +0000
+Message-ID: <corpus-0043@example.org>
+MIME-Version: 1.0
+Content-Type: text/plain; format=flowed; delsp=yes
+Content-Transfer-Encoding: 8bit
+
+Olá Bob, this paragraph was wrapped by a client  
+that sends flowed text.
+
+> Quoted text that was  
+> wrapped too.
+ From a space-stuffed line.
+-- 
+Alice

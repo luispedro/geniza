@@ -16,9 +16,9 @@ design leaves open.
   injection passes (see M5).
 - **M6 in progress.** Done: the schema, `reindex`'s headers-only pass,
   and updates from appended segment records, which give ingest its
-  catalog and `show` its id lookup, and threading (see M6). Next: body
-  text and FTS, `search`, and incremental updates from journals and
-  `incoming/`.
+  catalog and `show` its id lookup, threading, and message text, which
+  `show` prints (see M6). Next: the body pass and FTS, `search`, and
+  incremental updates from journals and `incoming/`.
 
 ## Tooling
 
@@ -66,6 +66,7 @@ src/geniza/
     recipes.py          # base64 / identity / QP round-trip checks
     names.py            # filename decoding and sanitising
     strip.py            # stub out bodies and splice them back
+    text.py             # message text: charsets, flowed, HTML to text
   store/
     segment.py          # record framing, writer, reader, tail recovery
     attachments.py      # content-addressed attachment files
@@ -235,8 +236,8 @@ existed; `init_store` now always removes them. M8 adds `sync.json` (step
   (known message ids and blob files) and the id lookup in `show`. The
   index goes in `cache/index.sqlite`, which `config.open_cache` already
   removes on a store id mismatch.
-- `show` gains the message text once search decodes bodies (charset,
-  QP/base64, HTML to text); until then it prints headers and parts only.
+- Message text (charset, QP/base64, HTML to text) for search and for
+  `show`, which prints it.
 - `geniza search` over FTS5, with a small query syntax for
   `from:`/`to:`/`subject:`/`mailbox:`/`date:` mapped onto columns.
 - Union-find threading; tests for out-of-order replies and thread merges.
@@ -265,6 +266,14 @@ threads against the connected components of the links for random
 messages in random order, and that threads from updates over several
 batches (replies before their parents, a message joining two threads)
 are those of a rebuild.
+
+Message text (`mime/text.py`, DESIGN.md "Message text") decodes the body
+parts (transfer encoding, charset with browser-style supersets and a
+UTF-8/Windows-1252 guess when unlabelled, `format=flowed`, HTML to text
+with `html.parser`) for `show` now and the FTS pass next. Property tests
+round-trip plain text through each transfer encoding and check that
+arbitrary bytes never raise; two corpus cases cover an HTML-only message
+whose charset is in a `<meta>` tag and unlabelled flowed UTF-8.
 
 The journal also records what servers keep outside the messages (mailbox
 hierarchy, order and subscription, per-account received dates, server

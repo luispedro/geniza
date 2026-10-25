@@ -840,6 +840,56 @@ def html_related_alternative() -> bytes:
     )
 
 
+HTML_CP1252 = """\
+<html><head><title>Not text</title>
+<meta http-equiv="Content-Type" content="text/html; charset=windows-1252">
+<style>p { color: red; }</style>
+<script>var x = "<p>not text</p>";</script></head>
+<body><div>Caf\xe9 &amp; \x93bistro\x94<br>
+second   line</div>
+<p>A list:</p><ul><li>one</li><li> two </li></ul>
+<table><tr><td>cell 1</td><td>cell 2</td></tr></table>
+<pre>  kept
+    as is</pre>
+<p>&eacute;&#233;&nbsp;end</p></body></html>
+"""
+
+
+@case("html_only_meta_charset")
+def html_only_meta_charset() -> bytes:
+    """HTML only, quoted-printable Windows-1252, its charset given only by
+    a <meta> tag."""
+    # Latin-1 maps each escape to its byte: 0x93 and 0x94 are quotes in
+    # Windows-1252.
+    body = quopri.encodestring(HTML_CP1252.encode("latin-1")).decode("ascii")
+    return crlf(
+        headers("Bistro", mid(42))
+        + "Content-Type: text/html\n"
+        + "Content-Transfer-Encoding: quoted-printable\n\n"
+        + body
+    )
+
+
+@case("flowed_unlabelled_utf8")
+def flowed_unlabelled_utf8() -> bytes:
+    """format=flowed with delsp=yes, 8-bit UTF-8 without a charset:
+    soft line breaks, a quoted flowed paragraph, space-stuffing and a
+    signature separator."""
+    return lf(
+        headers("Flowed", mid(43))
+        + "Content-Type: text/plain; format=flowed; delsp=yes\n"
+        + "Content-Transfer-Encoding: 8bit\n\n"
+        + "Olá Bob, this paragraph was wrapped by a client  \n"
+        + "that sends flowed text.\n"
+        + "\n"
+        + "> Quoted text that was  \n"
+        + "> wrapped too.\n"
+        + " From a space-stuffed line.\n"
+        + "-- \n"
+        + "Alice\n"
+    )
+
+
 @case("related_non_image_content_id")
 def related_non_image_content_id() -> bytes:
     """multipart/related with Content-IDs on non-image parts: a PDF shown

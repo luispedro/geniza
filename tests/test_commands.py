@@ -15,6 +15,7 @@ from conftest import corpus_files
 
 from geniza import cli, show
 from geniza.debug import _from_date, received_date
+from geniza.mime.text import texts
 from geniza.store import attachments, reader, segment
 from geniza.store.attachments import AttachmentWriter
 from geniza.store.ingest import message_id
@@ -316,7 +317,7 @@ def test_show_summary(
     store: Path, config: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     capsys.readouterr()
-    with_parts = 0
+    with_parts = with_attached = 0
     for data in MSGS:
         id = message_id(data)
         assert run(config, "--json", "show", id) == 0
@@ -333,7 +334,18 @@ def test_show_summary(
         for p in info["parts"]:
             assert f"  {p['path']}: {p['kind']} {p['mode']} {p['file']}\n" in out
         with_parts += bool(info["parts"])
+        message, *attached = texts(data)
+        assert info["text"] == message.text
+        assert [(m["path"], m["text"]) for m in info["attached"]] == [
+            (m.path, m.text) for m in attached
+        ]
+        if message.text:
+            assert f"\n\n{message.text}\n" in out
+        for m in attached:
+            assert f"\n--- attached message {m.path} ---\n" in out
+            with_attached += 1
     assert with_parts > 0
+    assert with_attached > 0
 
 
 def test_show_after_another_import(

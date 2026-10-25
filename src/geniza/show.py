@@ -7,8 +7,9 @@ segments are found.
 
 With ``--raw`` the original message is written to stdout byte for byte;
 otherwise a summary: where the record is, its dates and sizes, the main
-message headers and the extracted parts. Either way the message is rebuilt
-and checked against its id first.
+message headers and the extracted parts, then the message text and that of
+each attached message. Either way the message is rebuilt and checked
+against its id first.
 """
 
 import argparse
@@ -18,11 +19,12 @@ import sqlite3
 import sys
 from contextlib import closing
 from dataclasses import dataclass
+from email.message import Message
 from typing import TYPE_CHECKING, Any
 
 from geniza.config import load
 from geniza.index import reindex
-from geniza.mime import tree
+from geniza.mime.text import clean, texts
 from geniza.store import reader, segment
 from geniza.store.attachments import AttachmentError
 from geniza.store.journal import MSG_PREFIX
@@ -75,23 +77,23 @@ def find(conn: sqlite3.Connection, digest: str) -> list[Found]:
     return [Found(*row) for row in rows]
 
 
-def _headers(data: bytes) -> dict[str, list[str]]:
+def _headers(message: Message) -> dict[str, list[str]]:
     """The summary headers of a message, decoded for display."""
-    message = tree.parse(data).headers
     headers: dict[str, list[str]] = {}
     for name in SUMMARY_HEADERS:
         values = []
         for value in message.get_all(name) or ():
             try:
-                values.append(" ".join(str(value).split()))
+                values.append(clean(" ".join(str(value).split())))
             except Exception:  # display only: never fail on a header
-                values.append(" ".join(repr(value).split()))
+                values.append(clean(" ".join(repr(value).split())))
         if values:
             headers[name] = values
     return headers
 
 
 def summary(found: Found, header: Header, data: bytes) -> dict[str, Any]:
+    message, *attached = texts(data)
     return {
         "id": header.id,
         "segment": found.segment,
@@ -100,8 +102,13 @@ def summary(found: Found, header: Header, data: bytes) -> dict[str, Any]:
         "stored": format_time(header.stored),
         "size": header.size,
         "stripped_size": header.stripped_size,
-        "headers": _headers(data),
+        "headers": _headers(message.root.headers),
         "parts": [p.to_json() for p in parse_parts(header.parts, header.stripped_size)],
+        "text": message.text,
+        "attached": [
+            {"path": m.path, "headers": _headers(m.root.headers), "text": m.text}
+            for m in attached
+        ],
     }
 
 
@@ -120,6 +127,14 @@ def text(info: dict[str, Any]) -> str:
         lines += [
             f"  {p['path']}: {p['kind']} {p['mode']} {p['file']}" for p in info["parts"]
         ]
+    if info["text"]:
+        lines += ["", info["text"]]
+    for m in info["attached"]:
+        lines += ["", f"--- attached message {m['path']} ---"]
+        for name, values in m["headers"].items():
+            lines += [f"{name}: {v}" for v in values]
+        if m["text"]:
+            lines += ["", m["text"]]
     return "\n".join(lines) + "\n"
 
 

@@ -1038,6 +1038,34 @@ version is emptied and rebuilt, never migrated.
 
 SQLite with FTS5 is required; its availability is checked at startup.
 
+### Message text
+
+The text of a message, for `show` and for search, is that of its body
+parts (see [Classification](#classification)), best effort and never an
+error:
+
+- Transfer encodings are undone leniently (base64 with stray characters
+  dropped and padding mended); an unknown one is read as it is.
+- The charset comes from `Content-Type`, or for HTML without one, from a
+  `<meta>` tag in its first 4 KiB. Labels are decoded as the superset
+  clients mean (as browsers do: ISO-8859-1 as Windows-1252, GB2312 as
+  GB18030, EUC-KR as CP949, Shift_JIS as CP932, …). Without a label, or
+  with `us-ascii` or an unknown one, it is UTF-8 if it decodes, else
+  Windows-1252; otherwise what does not decode is replaced.
+- Line endings become LF. `format=flowed` text (RFC 3676, with `delsp`)
+  has its soft line breaks joined.
+- HTML is converted with the stdlib `html.parser`: element text, with line
+  breaks for block elements and `<br>`, list items as `- `, `<pre>` kept,
+  and scripts, styles and titles left out.
+- In a `multipart/alternative`, the last alternative with plain text is
+  used, else the last with any text (an empty plain part does not hide the
+  HTML). Other body parts are joined, in order, by a blank line.
+- Control characters other than tab and newline are removed, so the text
+  is safe to print.
+
+A message attached to another (`message/rfc822`) has its own text, at any
+depth; `show` prints it after the message's own.
+
 ### Threads
 
 Server thread ids are not usable as the primary grouping: JMAP `threadId`
@@ -1095,8 +1123,10 @@ and checked against its id. With `--raw` it is written to stdout byte for
 byte; otherwise `show` prints a summary: the record's segment and offset,
 its received and stored times and sizes, the message's `From`, `To`,
 `Cc`, `Date`, `Subject` and `Message-ID`, and each extracted part with
-its kind, mode and file (`--json` gives the same as an object, with the
-parts as the record header has them). The id is looked up in the index,
+its kind, mode and file, then the message text and that of each attached
+message, with its headers (see [Message text](#message-text); `--json`
+gives the same as an object, with the parts as the record header has
+them). The id is looked up in the index,
 which is brought up to date first; a message only in `incoming/` is not
 found (yet).
 

@@ -1,0 +1,24 @@
+Received: from mx.example.org (mx.example.org [192.0.2.10])
+	by mail.example.net with ESMTPS id 4Xa9bC1d2Ez;
+	Thu, 22 Oct 2026 10:15:00 +0000
+From: Alice Example <alice@example.org>
+To: Bob Example <bob@example.net>
+Subject: Bistro
+Date: Thu, 22 Oct 2026 10:15:00 +0000
+Message-ID: <corpus-0042@example.org>
+MIME-Version: 1.0
+Content-Type: text/html
+Content-Transfer-Encoding: quoted-printable
+
+<html><head><title>Not text</title>
+<meta http-equiv=3D"Content-Type" content=3D"text/html; charset=3Dwindows-1=
+252">
+<style>p { color: red; }</style>
+<script>var x =3D "<p>not text</p>";</script></head>
+<body><div>Caf=E9 &amp; =93bistro=94<br>
+second   line</div>
+<p>A list:</p><ul><li>one</li><li> two </li></ul>
+<table><tr><td>cell 1</td><td>cell 2</td></tr></table>
+<pre>  kept
+    as is</pre>
+<p>&eacute;&#233;&nbsp;end</p></body></html>

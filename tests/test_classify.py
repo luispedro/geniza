@@ -64,11 +64,13 @@ EXPECTED: dict[str, list[tuple[str, str, str]]] = {
     "duplicate_message_id_b": [("1", B, INLINE)],
     "filenames_encoded": [("1", B, INLINE)] + [(str(i), A, STUB) for i in range(2, 7)],
     "filenames_hostile": [("1", B, INLINE)] + [(str(i), A, STUB) for i in range(2, 11)],
+    "flowed_unlabelled_utf8": [("1", B, INLINE)],
     "forwarded_rfc822": [
         ("1", B, INLINE),
         ("2.1", B, INLINE),  # body of the attached message
         ("2.2", A, STUB),
     ],
+    "html_only_meta_charset": [("1", B, INLINE)],
     "html_related_alternative": [
         ("1", B, INLINE),
         ("2.1", B, INLINE),  # the root of multipart/related
