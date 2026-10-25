@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 INDEX_FILE = "index.sqlite"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 #: Run one statement at a time, split at ";": comments must not hold one.
 SCHEMA = """
@@ -30,11 +30,12 @@ CREATE TABLE messages (
     subject TEXT,
     message_id TEXT,
     in_reply_to TEXT,
-    thread_id TEXT,
+    thread_id INTEGER,
     state TEXT NOT NULL CHECK (state IN ('live', 'dropped'))
 );
 CREATE INDEX messages_message_id ON messages (message_id);
 CREATE INDEX messages_date ON messages (date);
+CREATE INDEX messages_thread_id ON messages (thread_id);
 
 CREATE TABLE incoming (
     account TEXT NOT NULL,
@@ -90,6 +91,14 @@ CREATE TABLE attachment_names (
     name TEXT NOT NULL,
     PRIMARY KEY (blob, msg, name)
 ) WITHOUT ROWID;
+
+-- The thread of every id seen: a message's Message-ID (or "<id>" for
+-- one without), or an id it names.
+CREATE TABLE threads (
+    message_id TEXT PRIMARY KEY,
+    thread INTEGER NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX threads_thread ON threads (thread);
 
 -- How far each segment has been read: records end at or before
 -- "indexed", and the next one starts there.

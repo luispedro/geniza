@@ -32,6 +32,8 @@ class Envelope:
     message_id: str | None = None
     #: The first message id in ``In-Reply-To``.
     in_reply_to: str | None = None
+    #: Every message id in ``References``, in order, without repeats.
+    references: tuple[str, ...] = ()
 
     @classmethod
     def parse(cls, head: bytes) -> Self:
@@ -46,6 +48,11 @@ class Envelope:
             subject=_joined(headers, "Subject"),
             message_id=_msg_id(_raw(headers, "Message-ID"), bare=True),
             in_reply_to=_msg_id(_raw(headers, "In-Reply-To"), bare=False),
+            references=tuple(
+                dict.fromkeys(
+                    id for v in _raw(headers, "References") for id in _MSG_ID.findall(v)
+                )
+            ),
         )
 
 

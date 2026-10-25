@@ -2,8 +2,9 @@
 bring it up to date (DESIGN.md, "Index (cache)").
 
 This is the headers-only pass: record headers and the header block of each
-message (decompressing only the start of its body), the files in
-``incoming/``, the attachment files records name, and the journals. The
+message (decompressing only the start of its body, which also gives its
+thread), the files in ``incoming/``, the attachment files records name,
+and the journals. The
 index is rebuilt in one transaction, so a reader sees either the old index
 or the new one.
 
@@ -28,7 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from geniza.config import load, open_cache, read_store
-from geniza.index import schema
+from geniza.index import schema, threads
 from geniza.index.envelope import Envelope
 from geniza.store import segment
 from geniza.store.ingest import Catalog
@@ -126,6 +127,7 @@ def _segments(store: Path, conn: sqlite3.Connection, report: Report) -> None:
                 except ValueError as e:
                     report.problems.append(f"{name}: record at offset {offset}: {e}")
                     parts = []
+                envelope = Envelope.parse(head)
                 conn.execute(
                     _INSERT_MESSAGE,
                     (
@@ -136,9 +138,10 @@ def _segments(store: Path, conn: sqlite3.Connection, report: Report) -> None:
                         header.frame_size,
                         header.size,
                         format_time(header.received),
-                        *_envelope(Envelope.parse(head)),
+                        *_envelope(envelope),
                     ),
                 )
+                threads.join(conn, header.id, envelope)
                 conn.executemany(
                     "INSERT OR IGNORE INTO attachments (blob, file, kind, size)"
                     " VALUES (?, ?, ?, ?)",
@@ -216,6 +219,7 @@ def _incoming(
                 (account, msg, "held" if fate is None else fate.status),
             )
             received = datetime.fromtimestamp(int(st.st_mtime), UTC)
+            envelope = Envelope.parse(head)
             conn.execute(
                 _INSERT_MESSAGE,
                 (
@@ -226,9 +230,10 @@ def _incoming(
                     None,
                     st.st_size,
                     format_time(received),
-                    *_envelope(Envelope.parse(head)),
+                    *_envelope(envelope),
                 ),
             )
+            threads.join(conn, msg, envelope)
     # Dropped: held in no segment, and dropped by every account holding it.
     conn.execute(
         "UPDATE messages SET state = 'dropped' WHERE location = 'incoming'"

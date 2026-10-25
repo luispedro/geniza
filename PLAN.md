@@ -16,8 +16,8 @@ design leaves open.
   injection passes (see M5).
 - **M6 in progress.** Done: the schema, `reindex`'s headers-only pass,
   and updates from appended segment records, which give ingest its
-  catalog and `show` its id lookup (see M6). Next: threading, body text
-  and FTS, `search`, and incremental updates from journals and
+  catalog and `show` its id lookup, and threading (see M6). Next: body
+  text and FTS, `search`, and incremental updates from journals and
   `incoming/`.
 
 ## Tooling
@@ -257,6 +257,14 @@ segment shrank or vanished); `debug import-local` takes its catalog from
 it and `show` looks ids up in it. `Catalog.scan` stays as the slow
 reference the tests compare against. Journals and `incoming/` are read
 only by a rebuild until the incremental step.
+
+Threads are computed by the same pass, from `References` and
+`In-Reply-To`, as a union-find kept in the index (`threads`): an update
+joins the new records' ids to the threads already there. Tests check the
+threads against the connected components of the links for random
+messages in random order, and that threads from updates over several
+batches (replies before their parents, a message joining two threads)
+are those of a rebuild.
 
 The journal also records what servers keep outside the messages (mailbox
 hierarchy, order and subscription, per-account received dates, server

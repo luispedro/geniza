@@ -985,6 +985,10 @@ segment bodies (for FTS), `incoming/`, `attachments/` and the journals.
   taken as UTC); `message_id` and `in_reply_to` are the first `<id>`,
   without brackets (a bracketless one-word `Message-ID` counts too). For a
   message only in `incoming/`, `received` is the file's modification time.
+  `thread_id` is a thread number (see [Threads](#threads)).
+- `threads(message_id, thread)` — the thread of every id seen, a
+  message's own or one it names (`<id>`, with the message's own id, for a
+  message without a Message-ID).
 - `incoming(account, msg, state)` — one row per `incoming/<account>/` file;
   `state` ∈ {held, promoted, dropped, purged}, from the account's journal.
 - `membership(account, mbox, msg, rid, received, thread)` (`received` and
@@ -1043,18 +1047,27 @@ Gmail-only. The index spans all mailboxes and accounts, so threads are
 computed locally, from headers only (as notmuch does):
 
 - Each message links its own Message-ID with every id in its `References`
-  and `In-Reply-To`. A thread is a connected component of that graph,
-  maintained incrementally with union-find.
+  and the first in its `In-Reply-To` (after it, clients put addresses in
+  angle brackets: `<id> (Ann <ann@example.org>'s message)`). A thread is a
+  connected component of that graph, maintained incrementally with
+  union-find.
 - A reply arriving before its parent still joins the right thread, because
   it already names the parent's id. A message that connects two threads
   merges them.
-- Messages without a Message-ID get a synthetic one derived from their hash.
+- Messages without a Message-ID get a synthetic one derived from their
+  hash: their id in angle brackets, `<sha256:…>`, which no Message-ID in
+  the index equals (those are kept without their outer brackets).
 - Different messages sharing a Message-ID (a sent copy and the mailing-list
   copy with a footer) are distinct messages in the same thread.
 - No subject-based merging: wrongly joined threads are worse than split ones.
 
 Thread ids live only in the cache, so the algorithm can change later with a
-`reindex` and no migration.
+`reindex` and no migration. They are numbers that label a thread, not
+names for it: a new thread takes one more than the highest in use, and
+when a message merges threads, they take the number of the one with the
+most ids (on a tie, the lowest number), so a number can change at a merge
+and after a `reindex`. Relabelling the smaller side keeps the cost of
+merges to O(log n) relabellings per id.
 
 ## CLI (initial)
 

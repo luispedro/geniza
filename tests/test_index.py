@@ -125,9 +125,10 @@ def test_envelope_never_raises(data: bytes) -> None:
 def check_text(e: Envelope) -> None:
     """Every field can go into SQLite: valid Unicode, on one line."""
     for value in vars(e).values():
-        if value is not None:
-            value.encode("utf-8")
-            assert "\n" not in value and "\r" not in value
+        for text in value if isinstance(value, tuple) else [value]:
+            if text is not None:
+                text.encode("utf-8")
+                assert "\n" not in text and "\r" not in text
 
 
 @pytest.mark.parametrize(
@@ -408,11 +409,33 @@ def test_reindex_cache_of_another_store(
 
 
 def dump(cache: Path) -> dict[str, list[tuple[object, ...]]]:
-    """What the segments give the index."""
-    return {
+    """What the segments give the index. Thread numbers depend on the order
+    messages were indexed in, so each thread is named by its first message
+    id instead."""
+    tables = {
         t: query(cache, f"SELECT * FROM {t} ORDER BY 1")
-        for t in ("messages", "attachments", "segments")
+        for t in ("attachments", "segments")
     }
+    name = dict(
+        query(cache, "SELECT thread_id, min(id) FROM messages GROUP BY thread_id")
+    )
+    tables["messages"] = [
+        tuple(name[v] if k == "thread_id" else v for k, v in row.items())
+        for row in query_dicts(cache, "SELECT * FROM messages ORDER BY 1")
+    ]
+    tables["threads"] = [
+        (k, name[t]) for k, t in query(cache, "SELECT * FROM threads ORDER BY 1")
+    ]
+    return tables
+
+
+def query_dicts(cache: Path, sql: str) -> list[dict[str, object]]:
+    conn = sqlite3.connect(cache / schema.INDEX_FILE)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(row) for row in conn.execute(sql)]
+    finally:
+        conn.close()
 
 
 def rebuilt(store: Path, tmp_path: Path) -> dict[str, list[tuple[object, ...]]]:
@@ -429,12 +452,30 @@ def test_update_builds_a_new_index(store: Path, cache: Path, tmp_path: Path) -> 
 
 MONTHS = [datetime(2019, 3, 4, tzinfo=UTC), datetime(2024, 12, 1, tzinfo=UTC), T0]
 
+#: Two threads, "a" and "b", and a message joining them.
+THREADED = {
+    f"threaded_{mid}": (
+        f"From: x@example.org\nSubject: s\nMessage-ID: <{mid}@example.org>\n"
+        + "".join(f"References: <{r}@example.org>\n" for r in refs)
+        + "\nText.\n"
+    ).encode()
+    for mid, refs in [
+        ("a", []),
+        ("a1", ["a"]),
+        ("a2", ["a", "a1"]),
+        ("b", []),
+        ("b1", ["b"]),
+        ("ab", ["a1", "b1"]),
+    ]
+}
+POOL = CORPUS | THREADED
+
 
 @settings(max_examples=20, deadline=None)
 @given(
     st.lists(
         st.lists(
-            st.tuples(st.sampled_from(sorted(CORPUS)), st.sampled_from(MONTHS)),
+            st.tuples(st.sampled_from(sorted(POOL)), st.sampled_from(MONTHS)),
             max_size=6,
         ),
         min_size=1,
@@ -464,7 +505,7 @@ def test_update_matches_a_rebuild(
                     clock=lambda: T0,
                 ) as ing:
                     for name, received in batch:
-                        ing.add(CORPUS[name], received)
+                        ing.add(POOL[name], received)
         with closing(update(store, cache)) as conn:
             assert catalog(conn) == Catalog.scan(store)
         assert dump(cache) == rebuilt(store, Path(tmp))
