@@ -9,8 +9,10 @@ either the old index or the new one. The body pass (``bodies``) then reads
 each message in full for search, in transactions of its own.
 
 Segments are append-only, so the index records how far it has read each
-one and ``update`` reads on from there. Journals and ``incoming/`` are only
-read by a rebuild for now.
+one and ``update`` reads on from there. It replays an account's journal
+again, in full, when the journal files changed, and reads its
+``incoming/`` again when the files there (or its journal) changed: both are
+small next to the segments.
 
 ``reindex`` reads the store without the store lock, as other readers do. A
 record cut short at the end of a segment can be one being written, so it is
@@ -33,7 +35,13 @@ from geniza.index import bodies, schema, threads
 from geniza.index.envelope import Envelope
 from geniza.store import segment
 from geniza.store.ingest import Catalog
-from geniza.store.journal import MSG_PREFIX, JournalError, State, replay
+from geniza.store.journal import (
+    MSG_PREFIX,
+    JournalError,
+    State,
+    journal_files,
+    replay,
+)
 from geniza.store.parts import parse_parts
 from geniza.store.segment import HEAD_MAX, SegmentError, TornRecord, format_time
 
@@ -197,75 +205,95 @@ def _read_head(path: Path) -> tuple[bytes, os.stat_result]:
     return head[: segment.header_end(head) or HEAD_MAX], st
 
 
+def _dirs(root: Path) -> set[str]:
+    return {p.name for p in root.iterdir() if p.is_dir()} if root.is_dir() else set()
+
+
+def _files(store: Path, account: str) -> dict[str, Path]:
+    """The messages in an account's ``incoming/``, by id."""
+    root = store / "incoming" / account
+    if not root.is_dir():
+        return {}
+    return {
+        MSG_PREFIX + m[1]: path
+        for path in sorted(root.iterdir())
+        if (m := _INCOMING_NAME.fullmatch(path.name))
+    }
+
+
 def _incoming(
-    store: Path, conn: sqlite3.Connection, states: dict[str, State], report: Report
+    conn: sqlite3.Connection,
+    account: str,
+    files: dict[str, Path],
+    state: State,
+    report: Report,
 ) -> None:
-    """The files in each account's ``incoming/``. A file's received date
-    is its modification time."""
-    root = store / "incoming"
-    accounts = (
-        sorted(p.name for p in root.iterdir() if p.is_dir()) if root.is_dir() else []
-    )
-    for account in accounts:
-        state = states.get(account, State())
-        for path in sorted((root / account).iterdir()):
-            if not (m := _INCOMING_NAME.fullmatch(path.name)):
-                continue
-            msg = MSG_PREFIX + m[1]
+    """The rows of the files in an account's ``incoming/``, and the
+    messages not indexed yet among them. A file's received date is its
+    modification time."""
+    for msg, path in files.items():
+        known = conn.execute("SELECT 1 FROM messages WHERE id = ?", (msg,)).fetchone()
+        if known is None:
             try:
                 head, st = _read_head(path)
             except OSError as e:
                 report.problems.append(f"{path}: {e.strerror}")
                 continue
-            report.incoming += 1
-            fate = state.fates.get(msg)
-            conn.execute(
-                "INSERT INTO incoming (account, msg, state) VALUES (?, ?, ?)",
-                (account, msg, "held" if fate is None else fate.status),
-            )
-            received = datetime.fromtimestamp(int(st.st_mtime), UTC)
-            envelope = Envelope.parse(head)
-            conn.execute(
-                _INSERT_MESSAGE,
-                (
-                    msg,
-                    "incoming",
-                    None,
-                    None,
-                    None,
-                    st.st_size,
-                    format_time(received),
-                    *_envelope(envelope),
-                ),
-            )
-            threads.join(conn, msg, envelope)
-    # Dropped: held in no segment, and dropped by every account holding it.
+        report.incoming += 1
+        fate = state.fates.get(msg)
+        conn.execute(
+            "INSERT INTO incoming (account, msg, state) VALUES (?, ?, ?)",
+            (account, msg, "held" if fate is None else fate.status),
+        )
+        if known is not None:
+            continue
+        received = datetime.fromtimestamp(int(st.st_mtime), UTC)
+        envelope = Envelope.parse(head)
+        conn.execute(
+            _INSERT_MESSAGE,
+            (
+                msg,
+                "incoming",
+                None,
+                None,
+                None,
+                st.st_size,
+                format_time(received),
+                *_envelope(envelope),
+            ),
+        )
+        threads.join(conn, msg, envelope)
+
+
+def _dropped(conn: sqlite3.Connection) -> None:
+    """Dropped: held in no segment, and dropped by every account holding
+    it."""
     conn.execute(
-        "UPDATE messages SET state = 'dropped' WHERE location = 'incoming'"
-        " AND NOT EXISTS (SELECT 1 FROM incoming i WHERE i.msg = messages.id"
-        " AND i.state NOT IN ('dropped', 'purged'))"
+        "UPDATE messages SET state = iif(EXISTS (SELECT 1 FROM incoming i"
+        " WHERE i.msg = messages.id AND i.state NOT IN ('dropped', 'purged')),"
+        " 'live', 'dropped') WHERE location = 'incoming'"
     )
 
 
-def _journals(store: Path, report: Report) -> dict[str, State]:
-    root = store / "state"
-    accounts = (
-        sorted(p.name for p in root.iterdir() if p.is_dir()) if root.is_dir() else []
-    )
-    states = {}
-    for account in accounts:
-        state = State()
-        try:
-            replay(store, account, state)
-        except JournalError as e:
-            report.problems.append(str(e))
-        states[account] = state
-    return states
+def _journal(store: Path, account: str) -> str:
+    """The journal files of an account and their sizes, which change
+    whenever it does (it is append-only)."""
+    return " ".join(f"{p.name}:{_file_size(p)}" for p in journal_files(store, account))
 
 
-def _state(conn: sqlite3.Connection, account: str, state: State) -> None:
+def _replay(store: Path, account: str, report: Report) -> State:
+    state = State()
+    try:
+        replay(store, account, state)
+    except JournalError as e:
+        report.problems.append(str(e))
+    return state
+
+
+def _state(conn: sqlite3.Connection, account: str, journal: str, state: State) -> None:
     conn.execute(
-        "INSERT INTO accounts (account, seq) VALUES (?, ?)", (account, state.seq)
+        "INSERT INTO accounts (account, seq, journal) VALUES (?, ?, ?)",
+        (account, state.seq, journal),
     )
     conn.executemany(
         "INSERT INTO mailboxes (account, mbox, name, role, parent, sort, subscribed)"
@@ -304,11 +332,81 @@ def _rebuild(store: Path, conn: sqlite3.Connection, report: Report) -> None:
     """Empty the index and build it again, inside the caller's
     transaction."""
     schema.create(conn)
-    states = _journals(store, report)
     _segments(store, conn, report)
-    _incoming(store, conn, states, report)
-    for account, state in states.items():
-        _state(conn, account, state)
+    journals = _dirs(store / "state")
+    for account in sorted(journals | _dirs(store / "incoming")):
+        # Before the replay: a journal that grows meanwhile is read again.
+        journal = _journal(store, account)
+        state = _replay(store, account, report)
+        if account in journals:
+            _state(conn, account, journal, state)
+        _incoming(conn, account, _files(store, account), state, report)
+    _dropped(conn)
+
+
+def _refresh(store: Path, conn: sqlite3.Connection, report: Report) -> None:
+    """Bring the journals and ``incoming/`` up to date, after the segments:
+    an account whose journal or ``incoming/`` files changed is read again
+    in full, and a message no longer anywhere is removed."""
+    journals = _dirs(store / "state")
+    read = dict(conn.execute("SELECT account, journal FROM accounts"))
+    held: dict[str, set[str]] = {}
+    for account, msg in conn.execute("SELECT account, msg FROM incoming"):
+        held.setdefault(account, set()).add(msg)
+    for account in sorted(
+        journals | _dirs(store / "incoming") | read.keys() | held.keys()
+    ):
+        journal = _journal(store, account) if account in journals else None
+        files = _files(store, account)
+        moved = journal != read.get(account)
+        if not moved and files.keys() == held.get(account, set()):
+            continue
+        state = _replay(store, account, report) if journal is not None else State()
+        if moved:
+            for table in ("accounts", "mailboxes", "membership", "flags"):
+                conn.execute(f"DELETE FROM {table} WHERE account = ?", (account,))
+            if journal is not None:
+                _state(conn, account, journal, state)
+        conn.execute("DELETE FROM incoming WHERE account = ?", (account,))
+        _incoming(conn, account, files, state, report)
+    _remove_gone(store, conn, report)
+    _dropped(conn)
+
+
+def _remove_gone(store: Path, conn: sqlite3.Connection, report: Report) -> None:
+    """Remove the messages that were only in ``incoming/`` and are in no
+    account's now (purged), and thread the rest of their threads again."""
+    gone = conn.execute(
+        "SELECT rowid, id, thread_id FROM messages WHERE location = 'incoming'"
+        " AND NOT EXISTS (SELECT 1 FROM incoming i WHERE i.msg = messages.id)"
+    ).fetchall()
+    for rowid, id, _ in gone:
+        conn.execute("DELETE FROM fts WHERE rowid = ?", (rowid,))
+        conn.execute("DELETE FROM attachment_names WHERE msg = ?", (id,))
+        conn.execute("DELETE FROM messages WHERE rowid = ?", (rowid,))
+    for thread in sorted({t for _, _, t in gone if t is not None}):
+        threads.split(conn, thread, lambda id: _head(store, conn, id, report))
+
+
+def _head(store: Path, conn: sqlite3.Connection, id: str, report: Report) -> Envelope:
+    """The envelope of an indexed message, read again."""
+    location, name, offset = conn.execute(
+        "SELECT location, segment, offset FROM messages WHERE id = ?", (id,)
+    ).fetchone()
+    head: bytes | SegmentError = b""
+    try:
+        if location == "segment":
+            _, _, head, _ = next(segment.scan_heads(store / name, offset))
+        else:
+            head, _ = _read_head(bodies.incoming_file(store, conn, id))
+    except SegmentError as e:
+        head = e
+    except OSError as e:
+        report.problems.append(f"{e.filename}: {e.strerror}")
+    if isinstance(head, SegmentError):
+        report.problems.append(str(head))
+        head = b""
+    return Envelope.parse(head)
 
 
 def _counts(conn: sqlite3.Connection, report: Report) -> None:
@@ -340,10 +438,11 @@ def reindex(store: Path, cache: Path) -> Report:
 
 def update(store: Path, cache: Path, *, text: bool = False) -> sqlite3.Connection:
     """Open the index of the store at ``store``, bringing it up to date:
-    index the records appended to segments since it was last updated, or
-    rebuild it if it has never read a segment or a segment it read is gone
-    or shorter. With ``text``, also read the bodies not read yet, for
-    search. Problems found are logged as warnings."""
+    index the records appended to segments since it was last updated, and
+    the accounts whose journal or ``incoming/`` changed; or rebuild it if
+    it has never read a segment or a segment it read is gone or shorter.
+    With ``text``, also read the bodies not read yet, for search. Problems
+    found are logged as warnings."""
     report = Report()
     conn = _open(store, cache)
     try:
@@ -355,6 +454,7 @@ def update(store: Path, cache: Path, *, text: bool = False) -> sqlite3.Connectio
                 _rebuild(store, conn, report)
             else:
                 _segments(store, conn, report)
+                _refresh(store, conn, report)
         if text:
             report.bodies = bodies.read_bodies(store, conn, report.problems)
     except BaseException:

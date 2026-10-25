@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 from conftest import corpus_files
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 from geniza import cli
@@ -32,6 +32,8 @@ from geniza.store.journal import (
     Flags,
     JournalWriter,
     Mbox,
+    Promote,
+    Purge,
     Remove,
     Undrop,
 )
@@ -171,11 +173,11 @@ def test_envelope_never_raises_on_header_values(
 def test_schema_version_mismatch_empties_the_index(tmp_path: Path) -> None:
     path = tmp_path / schema.INDEX_FILE
     conn = schema.connect(path)
-    conn.execute("INSERT INTO accounts VALUES ('a', 1)")
+    conn.execute("INSERT INTO accounts VALUES ('a', 1, '')")
     conn.execute("CREATE TABLE stray (x)")
     conn.close()
     conn = schema.connect(path)
-    assert conn.execute("SELECT * FROM accounts").fetchall() == [("a", 1)]
+    assert conn.execute("SELECT * FROM accounts").fetchall() == [("a", 1, "")]
     conn.execute(f"PRAGMA user_version = {schema.SCHEMA_VERSION + 1}")
     conn.close()
     conn = schema.connect(path)
@@ -191,7 +193,7 @@ def test_schema_version_mismatch_empties_the_index(tmp_path: Path) -> None:
 def test_transaction_rolls_back(tmp_path: Path) -> None:
     conn = schema.connect(tmp_path / schema.INDEX_FILE)
     with pytest.raises(ZeroDivisionError), schema.transaction(conn):
-        conn.execute("INSERT INTO accounts VALUES ('a', 1)")
+        conn.execute("INSERT INTO accounts VALUES ('a', 1, '')")
         _ = 1 / 0
     assert conn.execute("SELECT * FROM accounts").fetchall() == []
     conn.close()
@@ -298,7 +300,7 @@ def test_reindex_journal_state(store: Path, cache: Path) -> None:
     )
     report = reindex(store, cache)
     assert report.problems == [] and report.accounts == 2
-    assert query(cache, "SELECT * FROM accounts ORDER BY account") == [
+    assert query(cache, "SELECT account, seq FROM accounts ORDER BY account") == [
         ("home", 2),
         ("work", 10),
     ]
@@ -424,15 +426,20 @@ def test_reindex_cache_of_another_store(
 
 
 def dump(cache: Path) -> dict[str, list[tuple[object, ...]]]:
-    """What the segments give the index. Thread numbers depend on the order
-    messages were indexed in, so each thread is named by its first message
-    id instead."""
+    """Everything in the index. Thread numbers depend on the order messages
+    were indexed in, so each thread is named by its first message id
+    instead."""
     tables = {
         t: query(cache, f"SELECT * FROM {t} ORDER BY {order}")
         for t, order in [
             ("attachments", "1"),
             ("attachment_names", "1, 2, 3"),
             ("segments", "1"),
+            ("accounts", "1"),
+            ("mailboxes", "1, 2"),
+            ("membership", "1, 2, 3"),
+            ("flags", "1, 2, 3, 4"),
+            ("incoming", "1, 2"),
         ]
     }
     name = dict(
@@ -615,6 +622,112 @@ def test_update_reports_a_damaged_header_each_time(
             assert len(dump(cache)["messages"]) == 3
     finally:
         logging.getLogger("geniza").removeHandler(handler)
+
+
+def unlink_incoming(store: Path, account: str, data: bytes) -> None:
+    name = f"{message_id(data).removeprefix('sha256:')}.eml"
+    (store / "incoming" / account / name).unlink(missing_ok=True)
+
+
+def test_update_follows_journals_and_incoming(tmp_path: Path, cache: Path) -> None:
+    store = tmp_path / "store"
+    make_store(store, [CORPUS["plain_text_lf"]])
+    update(store, cache).close()
+    a1, ab, b1 = (THREADED[f"threaded_{k}"] for k in ("a1", "ab", "b1"))
+    w = JournalWriter(store, "work", clock=lambda: T0)
+    w.append([Mbox(mbox="m1", name="INBOX", role="inbox")])
+    for data, rid in [(a1, "1"), (ab, "2"), (b1, "3")]:
+        put_incoming(store, "work", data, 1_700_000_000)
+        w.append([Add(msg=message_id(data), mbox="m1", rid=rid)])
+    update(store, cache, text=True).close()
+    assert query(cache, "SELECT account, mbox, rid FROM membership ORDER BY 3") == [
+        ("work", "m1", "1"),
+        ("work", "m1", "2"),
+        ("work", "m1", "3"),
+    ]
+    sql = "SELECT state FROM messages WHERE id = ?"
+    assert query(cache, sql, message_id(ab)) == [("live",)]
+    # ab joins the threads of a1 and b1.
+    assert query(cache, "SELECT count(DISTINCT thread_id) FROM messages") == [(2,)]
+    w.append([Remove(msg=message_id(ab), mbox="m1", rid="2"), Drop(msg=message_id(ab))])
+    update(store, cache, text=True).close()
+    assert query(cache, sql, message_id(ab)) == [("dropped",)]
+    assert len(query(cache, "SELECT * FROM membership")) == 2
+    w.append([Undrop(msg=message_id(ab))])
+    update(store, cache).close()
+    assert query(cache, sql, message_id(ab)) == [("live",)]
+    w.append([Drop(msg=message_id(ab)), Purge(msg=message_id(ab))])
+    unlink_incoming(store, "work", ab)
+    update(store, cache, text=True).close()
+    assert query(cache, sql, message_id(ab)) == []
+    assert search(cache, "references") == set()
+    assert query(cache, "SELECT count(DISTINCT thread_id) FROM messages") == [(3,)]
+    assert dump(cache) == rebuilt(store, tmp_path)
+
+
+#: Messages for incoming/: one of each thread shape, and some corpus ones.
+HELD = [*THREADED, "plain_text_lf", "pgp_signed", "html_only_meta_charset"]
+
+OPS = st.one_of(
+    st.tuples(
+        st.sampled_from(["put", "file", "drop", "undrop", "purge", "flag", "remove"]),
+        st.sampled_from(["a", "b"]),
+        st.sampled_from(HELD),
+    ),
+    st.tuples(st.just("promote"), st.just(""), st.sampled_from(HELD)),
+)
+
+
+@settings(max_examples=25, deadline=None)
+@given(st.lists(st.lists(OPS, max_size=6), min_size=1, max_size=5))
+@example(  # b1 was the only link between b and ab; a file with no event
+    [
+        [(op, "a", f"threaded_{k}") for op in ["put", "file"] for k in ["b", "b1"]]
+        + [("put", "b", "threaded_ab")],
+        [("purge", "a", "threaded_b1"), ("file", "b", "pgp_signed")],
+    ]
+)
+def test_update_of_journals_and_incoming_matches_a_rebuild(
+    batches: list[list[tuple[str, str, str]]],
+) -> None:
+    """What sync and incoming/ evaluation do (DESIGN.md, "Incoming"),
+    with updates in between."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store, cache = Path(tmp) / "store", Path(tmp) / "cache"
+        make_store(store, [CORPUS["smime_signed"]])
+        writers = {k: JournalWriter(store, k, clock=lambda: T0) for k in "ab"}
+        for w in writers.values():
+            w.append([Mbox(mbox="m1", name="INBOX")])
+        for batch in batches:
+            for op, account, name in batch:
+                data = POOL[name]
+                msg = message_id(data)
+                w = writers.get(account)
+                match op:
+                    case "put" | "file":
+                        # One modification time per message: a rebuild
+                        # takes that of the first account holding it.
+                        put_incoming(store, account, data, 1_700_000_000 + len(data))
+                        if op == "put":  # else as if sync stopped there
+                            w.append([Add(msg=msg, mbox="m1", rid=name)])
+                    case "drop":
+                        w.append([Drop(msg=msg)])
+                    case "undrop":
+                        w.append([Undrop(msg=msg)])
+                    case "purge":
+                        unlink_incoming(store, account, data)
+                        w.append([Purge(msg=msg)])
+                    case "flag":
+                        w.append([Flags(msg=msg, mbox="m1", set=frozenset({"$seen"}))])
+                    case "remove":
+                        w.append([Remove(msg=msg, mbox="m1", rid=name)])
+                    case "promote":
+                        [(seg, offset)] = make_store(store, [data])
+                        for k, w in writers.items():
+                            unlink_incoming(store, k, data)
+                            w.append([Promote(msg=msg, segment=seg, offset=offset)])
+            update(store, cache, text=True).close()
+        assert dump(cache) == rebuilt(store, Path(tmp))
 
 
 # --- body pass ---------------------------------------------------------------

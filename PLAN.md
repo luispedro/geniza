@@ -14,12 +14,12 @@ design leaves open.
 - **M5 done.** Ingest, `debug import-local`, `show`, `export --mbox`
   and `verify` work, the "done when" run on real mail passed, and fault
   injection passes (see M5).
-- **M6 in progress.** Done: the schema, `reindex`'s headers-only pass,
-  and updates from appended segment records, which give ingest its
-  catalog and `show` its id lookup, threading, message text, which
-  `show` prints, and the body pass that fills the FTS table and the
-  attachments' types and names, and `search` (see M6). Next:
-  incremental updates from journals and `incoming/`.
+- **M6 done but for the optional attachment text** (`pdftotext`). The
+  index (`reindex`, kept up to date from segments, journals and
+  `incoming/`), threading, message text, which `show` prints, the body
+  pass and `search` work, and the "done when" holds: an updated index
+  searches like a rebuilt one (see M6). Next: attachment text, or
+  straight on to M7.
 
 ## Tooling
 
@@ -258,8 +258,18 @@ The index records how far it has read each segment and is brought up to
 date before use, reading only the records appended since (or rebuilt if a
 segment shrank or vanished); `debug import-local` takes its catalog from
 it and `show` looks ids up in it. `Catalog.scan` stays as the slow
-reference the tests compare against. Journals and `incoming/` are read
-only by a rebuild until the incremental step.
+reference the tests compare against.
+
+Journals and `incoming/` are read again per account when they change
+(the index keeps the sizes of the journal files it replayed), rather than
+keeping replay state: they are small next to the segments. A message
+purged from `incoming/` leaves the index, and its thread is made again
+from the messages left in it. A property test runs random sequences of
+what sync and incoming/ evaluation do (files held with and without their
+journal event, drops, undrops, purges, promotions, flags, removals) with
+updates in between and compares the whole index with a rebuild's; a
+search test checks the "done when" through the CLI (search, change the
+store, search, delete `cache/`, `reindex`, search).
 
 Threads are computed by the same pass, from `References` and
 `In-Reply-To`, as a union-find kept in the index (`threads`): an update

@@ -67,7 +67,7 @@ def _read(
             with suppress(ValueError):  # reported by the headers pass
                 parts = parse_parts(header.parts, header.stripped_size)
         else:
-            data = _incoming(store, conn, id).read_bytes()
+            data = incoming_file(store, conn, id).read_bytes()
     except SegmentError as e:
         problems.append(str(e))
         return
@@ -98,7 +98,7 @@ def _read(
     )
 
 
-def _incoming(store: Path, conn: sqlite3.Connection, id: str) -> Path:
+def incoming_file(store: Path, conn: sqlite3.Connection, id: str) -> Path:
     """The file of a message only in ``incoming/``: that of the first
     account holding it (the index lists the files found)."""
     (account,) = conn.execute(

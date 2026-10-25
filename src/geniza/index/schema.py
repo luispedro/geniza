@@ -14,7 +14,7 @@ from pathlib import Path
 from geniza.config import ConfigError
 
 INDEX_FILE = "index.sqlite"
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 #: Run one statement at a time, split at ";": comments must not hold one.
 SCHEMA = """
@@ -122,10 +122,13 @@ CREATE VIRTUAL TABLE fts USING fts5 (
     tokenize = 'unicode61 remove_diacritics 2'
 );
 
--- The last journal event applied, per account.
+-- The last journal event applied, per account, and the journal files
+-- read ("name:size", space-separated): any change to them means the
+-- account is replayed again.
 CREATE TABLE accounts (
     account TEXT PRIMARY KEY,
-    seq INTEGER NOT NULL
+    seq INTEGER NOT NULL,
+    journal TEXT NOT NULL
 ) WITHOUT ROWID;
 """
 

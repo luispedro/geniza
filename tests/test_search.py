@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import sqlite3
 from contextlib import closing
 from datetime import UTC, datetime
@@ -16,7 +17,7 @@ from geniza.config import init_store
 from geniza.index.reindex import update
 from geniza.search import QueryError, Term, date_range, lex
 from geniza.store.ingest import Ingester, message_id
-from geniza.store.journal import Add, Drop, JournalWriter, Mbox
+from geniza.store.journal import Add, Drop, JournalWriter, Mbox, Remove, Undrop
 from geniza.store.lock import StoreLock
 
 T0 = datetime(2026, 10, 23, 14, 2, 11, tzinfo=UTC)
@@ -257,3 +258,61 @@ def test_search_reads_bodies(config: Path, capsys: pytest.CaptureFixture[str]) -
     store, cache = config.parent / "store", config.parent / "cache"
     update(store, cache).close()  # headers only
     assert found(config, capsys, "budget") == ["undated", "old"]
+
+
+QUERIES = [
+    ["budget"],
+    ["--dropped", "budget"],
+    ["mailbox:inbox"],
+    ["mailbox:reports"],
+    ["mailbox:archive"],
+    ["date:2024"],
+    ["from:carol"],
+    [f"thread:{IDS['late'][7:15]}"],
+    ["--", "-mailbox:inbox", "date:2024.."],
+]
+
+
+def test_updated_index_searches_like_a_rebuilt_one(
+    config: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """M6's "done when": search, change the store (a new record, journal
+    events, a file in incoming/), search again with the updated index, then
+    delete cache/ and reindex: the results are the same."""
+    store, cache = config.parent / "store", config.parent / "cache"
+
+    def results() -> list[list[str]]:
+        out = []
+        for q in QUERIES:
+            assert run(config, "--json", "search", "-n", "0", *q) == 0
+            out.append(
+                [m["id"] for m in json.loads(capsys.readouterr().out)["messages"]]
+            )
+        return out
+
+    before = results()
+    more = msg("Budget, again", "Thu, 02 May 2024 12:00:00 +0000", "x")
+    with StoreLock(store) as lock, Ingester(store, lock, clock=lambda: T0) as ing:
+        ing.add(more, T0)
+    held = msg("Held", "Sat, 01 Jun 2024 00:00:00 +0000", "budget held")
+    path = store / "incoming" / "home" / f"{message_id(held)[7:]}.eml"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(held)
+    JournalWriter(store, "work", clock=lambda: T0).append(
+        [
+            Mbox(mbox="m6", name="Archive"),
+            Add(msg=message_id(more), mbox="m6", rid="4"),
+            Remove(msg=IDS["old"], mbox="m3", rid="2"),
+            Add(msg=IDS["old"], mbox="m1", rid="5"),
+            Undrop(msg=message_id(GONE)),
+        ]
+    )
+    JournalWriter(store, "home", clock=lambda: T0).append(
+        [Add(msg=message_id(held), mbox="i", rid="10")]
+    )
+    updated = results()
+    assert updated != before
+    shutil.rmtree(cache)
+    assert run(config, "reindex") == 0
+    capsys.readouterr()
+    assert results() == updated

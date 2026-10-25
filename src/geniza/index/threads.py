@@ -7,12 +7,14 @@ labelled eagerly: ``threads(message_id, thread)`` gives the thread of
 every id seen, a message's own or one it names, and ``messages.thread_id``
 the thread of each message. A message that links ids of several threads
 merges them into the one with the most ids, relabelling the others, so
-each id is relabelled O(log n) times in all. Thread numbers are labels
+each id is relabelled O(log n) times in all. A message removed from the
+index (purged from ``incoming/``) has its thread rebuilt from the
+messages left in it (``split``). Thread numbers are labels
 only: they can change when threads merge, and on a rebuild.
 """
 
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from geniza.index.envelope import Envelope
 
@@ -50,6 +52,23 @@ def join(conn: sqlite3.Connection, id: str, envelope: Envelope) -> int:
     )
     conn.execute("UPDATE messages SET thread_id = ? WHERE id = ?", (thread, id))
     return int(thread)
+
+
+def split(
+    conn: sqlite3.Connection, thread: int, envelope: Callable[[str], Envelope]
+) -> None:
+    """Thread the messages of ``thread`` again, after one left it: the ids
+    only that one named go, and the thread can come apart. ``envelope``
+    gives the envelope of a message by id."""
+    ids = [
+        id
+        for (id,) in conn.execute(
+            "SELECT id FROM messages WHERE thread_id = ? ORDER BY rowid", (thread,)
+        )
+    ]
+    conn.execute("DELETE FROM threads WHERE thread = ?", (thread,))
+    for id in ids:
+        join(conn, id, envelope(id))
 
 
 def _threads(conn: sqlite3.Connection, linked: list[str]) -> Iterable[int]:

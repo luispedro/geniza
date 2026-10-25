@@ -788,8 +788,9 @@ threads).
   keys in the order shown. An unknown `op` or field is an error, not
   skipped (the format version is in `store.toml`).
 - Current state = replay of all journal files, cached in the index (with
-  the last `seq` applied, so only newer events are replayed).
-  Replaying millions of lines takes seconds.
+  the last `seq` applied and the size of each file read). When the files
+  of an account change, the index replays it again in full: replaying
+  millions of lines takes seconds, and it is only needed after a sync.
 - Only the end of the last journal file can be torn (lines that do not
   parse up to the end of the file, an unterminated line, zeros). The
   writer truncates it, with a warning, before its first batch, even if it
@@ -984,7 +985,8 @@ segment bodies (for FTS), `incoming/`, `attachments/` and the journals.
   `date` is the first `Date` that parses, in UTC (one without a zone is
   taken as UTC); `message_id` and `in_reply_to` are the first `<id>`,
   without brackets (a bracketless one-word `Message-ID` counts too). For a
-  message only in `incoming/`, `received` is the file's modification time.
+  message only in `incoming/`, `received` is the modification time of the
+  first file of it indexed (that of the first account, on a rebuild).
   `thread_id` is a thread number (see [Threads](#threads)). `body_read`
   says whether the body pass has read the message.
 - `threads(message_id, thread)` — the thread of every id seen, a
@@ -997,7 +999,9 @@ segment bodies (for FTS), `incoming/`, `attachments/` and the journals.
   `flags(account, mbox, msg, flag)` (current flags only: those of a
   message in a mailbox it is in).
 - `mailboxes(account, mbox, name, role, parent, sort, subscribed)`;
-  `accounts(account, seq)`, the last journal event applied. `props` and
+  `accounts(account, seq, journal)`, the last journal event applied and
+  the journal files read with their sizes (`name:size`, space-separated).
+  `props` and
   settings are not indexed.
 - `attachments(blob, file, kind, mime_type, size)` (the first record
   naming a blob gives its file and kind; `size` is the file's),
@@ -1055,10 +1059,23 @@ reads its record, which is left out. Only commands that search run the
 body pass after the update (`show` and ingest do not need it). The first
 record of an id or blob is
 the first one indexed, which while a store is being initialized can be in
-a later segment than another copy: both are valid. Journals and
-`incoming/` are only read by a rebuild for now (incremental updates for
-them are the last step of M6). Ingest takes the message ids and blobs the
-store holds from the updated index.
+a later segment than another copy: both are valid. Ingest takes the
+message ids and blobs the store holds from the updated index.
+
+Journals and `incoming/` are small next to the segments, so an update
+reads an account again in full rather than keeping replay state: when its
+journal files are not those `accounts.journal` lists (an append changes a
+size), its journal is replayed and its mailboxes, membership and flags
+replaced; when that or the set of files in its `incoming/` changed, its
+`incoming` rows are made again (fates come from its journal) and the
+files not indexed yet are read. Damage in a journal is reported when it
+is replayed, and what replays before it is used. The sizes are taken before the replay, so
+an append during it is read again at the next update. A message that was
+only in `incoming/` and is in no account's any more (purged) is removed
+from the index, its search terms included, and the other messages of its
+thread are threaded again from their headers (see [Threads](#threads)), so
+that the index is what a rebuild would make, but for thread numbers and
+the `received` of a message held by several accounts.
 
 The schema has a version (`PRAGMA user_version`); an index of another
 version is emptied and rebuilt, never migrated.
@@ -1161,7 +1178,10 @@ Thread ids live only in the cache, so the algorithm can change later with a
 names for it: a new thread takes one more than the highest in use, and
 when a message merges threads, they take the number of the one with the
 most ids (on a tie, the lowest number), so a number can change at a merge
-and after a `reindex`. Relabelling the smaller side keeps the cost of
+and after a `reindex`. When a message leaves the index (purged from
+`incoming/`), its thread is made again from the messages left in it: the
+ids only it named go, and the thread can come apart into several, with new
+numbers. Relabelling the smaller side keeps the cost of
 merges to O(log n) relabellings per id.
 
 ## CLI (initial)
