@@ -55,6 +55,12 @@ def _cmd_stats(args: argparse.Namespace, out: Output) -> int:
     return stats.run(args, out)
 
 
+def _cmd_search(args: argparse.Namespace, out: Output) -> int:
+    from geniza import search
+
+    return search.run(args, out)
+
+
 def _cmd_show(args: argparse.Namespace, out: Output) -> int:
     from geniza import show
 
@@ -155,8 +161,29 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("accounts", nargs="*", metavar="ACCOUNT")
     p.add_argument("--allow-mass-drop", action="store_true")
 
-    p = add("search", "full-text search")
-    p.add_argument("query", nargs="+", metavar="QUERY")
+    p = add("search", "search messages, newest first", _cmd_search)
+    p.add_argument(
+        "query",
+        nargs="+",
+        metavar="QUERY",
+        help='words, "phrases" and prefix* (all must match), FIELD:VALUE for'
+        " FIELD in from, to, cc, subject, body, attachment, mailbox, date"
+        " (2024, 2024-03..2024-06) or thread (a message id); -TERM negates"
+        " (after --, or inside a quoted query)",
+    )
+    p.add_argument(
+        "-n",
+        "--limit",
+        type=int,
+        default=50,
+        metavar="N",
+        help="show at most N messages (0: all; default: %(default)s)",
+    )
+    p.add_argument(
+        "--dropped",
+        action="store_true",
+        help="include messages dropped from incoming/, during their grace period",
+    )
 
     p = add("show", "reconstruct a message", _cmd_show)
     p.add_argument("id", metavar="ID", help="message id, or a prefix of its digest")

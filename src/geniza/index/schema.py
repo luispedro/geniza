@@ -14,7 +14,7 @@ from pathlib import Path
 from geniza.config import ConfigError
 
 INDEX_FILE = "index.sqlite"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 #: Run one statement at a time, split at ";": comments must not hold one.
 SCHEMA = """
@@ -40,7 +40,8 @@ CREATE TABLE messages (
 );
 CREATE INDEX messages_body_read ON messages (body_read);
 CREATE INDEX messages_message_id ON messages (message_id);
-CREATE INDEX messages_date ON messages (date);
+-- The date search uses: Date, else when received.
+CREATE INDEX messages_when ON messages (coalesce(date, received));
 CREATE INDEX messages_thread_id ON messages (thread_id);
 
 CREATE TABLE incoming (

@@ -18,8 +18,8 @@ design leaves open.
   and updates from appended segment records, which give ingest its
   catalog and `show` its id lookup, threading, message text, which
   `show` prints, and the body pass that fills the FTS table and the
-  attachments' types and names (see M6). Next: `search`, and incremental
-  updates from journals and `incoming/`.
+  attachments' types and names, and `search` (see M6). Next:
+  incremental updates from journals and `incoming/`.
 
 ## Tooling
 
@@ -81,7 +81,7 @@ src/geniza/
     schema.py           # tables of cache/index.sqlite, schema version
     envelope.py         # header fields the index keeps
     reindex.py          # rebuild the index from the store
-    search.py
+    bodies.py           # body pass: FTS and attachment names
     threads.py          # union-find threading
   sync/
     base.py             # source interface shared by JMAP and IMAP
@@ -90,6 +90,7 @@ src/geniza/
     matching.py         # stable ids and header-verified matching (M9)
   stats.py              # stats --parts
   show.py               # show ID [--raw]
+  search.py             # search QUERY…
   export.py             # export --mbox
   verify.py             # verify
   debug.py              # debug import-local (development only)
@@ -284,6 +285,15 @@ batches and resumes after an interruption (tested, as is a damaged body
 reported once); `reindex` always runs it, `update` only when asked
 (`text=True`, for `search`). The update tests compare the index's terms,
 by message id, with a rebuild's.
+
+`search` (`search.py`, DESIGN.md "Search") turns a notmuch-like query
+into SQL: words, phrases and prefixes, optionally limited to a column,
+make one FTS5 `MATCH` (each quoted, so user input is never FTS5 syntax),
+and `mailbox:`, `date:` and `thread:` are conditions on the other tables;
+any term can be negated. Results are ordered by `Date` (else received
+time), through an expression index. Tests cover the lexer (property test:
+any input is FTS5-safe), date ranges, each field, negation, mailbox paths
+with a parent loop, dropped messages and the text output.
 
 The journal also records what servers keep outside the messages (mailbox
 hierarchy, order and subscription, per-account received dates, server

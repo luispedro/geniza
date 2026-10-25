@@ -1094,6 +1094,45 @@ error:
 A message attached to another (`message/rfc822`) has its own text, at any
 depth; `show` prints it after the message's own.
 
+### Search
+
+`geniza search QUERY…` lists the messages that match every term of a
+query, newest first. The words of the query are joined by spaces and split
+into terms again, so quotes belong to the query (`geniza search
+'subject:"annual report"'`), as in notmuch:
+
+- `word`, `"a phrase"` or `prefix*` matches the subject, the addresses,
+  the [message text](#message-text) and the attachment names, through
+  FTS5. Each is quoted for FTS5, so FTS5 syntax in a query (`AND`, `NEAR`,
+  `^`, `:`) is searched for as words, and a term with no letters or digits
+  is ignored.
+- `from:`, `to:`, `cc:`, `subject:`, `body:` and `attachment:` before one
+  of those limit it to that column. Any other `word:` is part of the word.
+- `mailbox:NAME` matches a mailbox, in any account, whose name, path
+  (parent names joined by `/`, as in `Archive/2020`) or role (`inbox`,
+  `trash`…) is `NAME`, ignoring case; a name no mailbox has is warned
+  about.
+- `date:` takes `YYYY`, `YYYY-MM`, `YYYY-MM-DD`, or a range of them,
+  `A..B`, `A..` or `..B`, with both ends included (`date:2024-03..2024-06`
+  is March to June). Days are UTC days. A message's date is its `Date`,
+  else when it was received; results are in that order too.
+- `thread:ID` matches the messages of the thread of a message, given by
+  its id or a prefix of it, as for `show`.
+- `-` before a term negates it. On the command line, negated terms go
+  after `--` or inside a quoted query (`geniza search -- -subject:re`).
+
+Messages only in `incoming/` are found too (`show` cannot print them
+yet); dropped ones, during their grace period, only with `--dropped`
+(see [Evaluation](#evaluation)). The output is one line per message: the
+first 12 hex digits of its id (enough for `show`), its date, `From` and
+`Subject`; `--json` gives the full id, `To`, thread number, location and
+state too, and the total number that match. At most 50 are listed by
+default (`--limit N`, 0 for all); when some are left out, a warning says
+how many matched. There are no snippets: the FTS table holds no text.
+
+`search` brings the index up to date first, the body pass included, so
+the first search after much new mail waits for it.
+
 ### Threads
 
 Server thread ids are not usable as the primary grouping: JMAP `threadId`
@@ -1129,7 +1168,7 @@ merges to O(log n) relabellings per id.
 
 ```
 geniza sync [ACCOUNT…]         # sync (all accounts by default); each then evaluates its incoming/
-geniza search QUERY            # FTS5 query, prints ids + summaries
+geniza search QUERY…           # messages matching every term, newest first
 geniza show ID [--raw]         # reconstruct the original message byte-exactly
 geniza export --mbox …         # full reconstruction to mbox
 geniza reindex                 # rebuild cache/ from store/
