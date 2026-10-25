@@ -3,8 +3,10 @@
 import json
 import mailbox
 import os
+from compression import bz2, gzip, lzma, zstd
 from datetime import UTC, datetime
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from conftest import corpus_files
@@ -152,6 +154,20 @@ def test_export_mbox(store: Path, config: Path, tmp_path: Path) -> None:
     before = out.read_bytes()
     assert run(config, "export", "--mbox", out) == 1
     assert out.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("suffix", "module"),
+    [(".gz", gzip), (".bz2", bz2), (".xz", lzma), (".zst", zstd), (".ZSTD", zstd)],
+)
+def test_export_compressed(
+    store: Path, config: Path, tmp_path: Path, suffix: str, module: ModuleType
+) -> None:
+    plain, packed = tmp_path / "out.mbox", tmp_path / f"out.mbox{suffix}"
+    assert run(config, "export", "--mbox", plain) == 0
+    assert run(config, "export", "--mbox", packed) == 0
+    assert packed.read_bytes() != plain.read_bytes()
+    assert module.decompress(packed.read_bytes()) == plain.read_bytes()
 
 
 def test_export_to_stdout(

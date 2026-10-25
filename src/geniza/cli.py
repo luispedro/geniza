@@ -156,7 +156,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="PATH",
         required=True,
-        help="mboxrd file to create ('-' for stdout)",
+        help="mboxrd file to create ('-' for stdout); compressed if it ends"
+        " in .gz, .bz2, .xz, .zst or .zstd",
     )
 
     add("reindex", "rebuild cache/ from store/")

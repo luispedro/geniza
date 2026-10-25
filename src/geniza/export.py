@@ -4,12 +4,18 @@ Messages are written in store order, each once, with the same ``From``
 line and escaping as segment bodies (DESIGN.md, "Message storage"). mbox
 has no length field, so a message that does not end with a newline gains
 one when the file is read back.
+
+A file name ending in ``.gz``, ``.bz2``, ``.xz``, ``.zst`` or ``.zstd`` is
+compressed accordingly.
 """
 
 import argparse
+import io
 import logging
 import os
 import sys
+from collections.abc import Callable
+from compression import bz2, gzip, lzma, zstd
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO
 
@@ -24,8 +30,21 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+type Compressor = Callable[[BinaryIO], io.BufferedIOBase]
 
-def write_mbox(store: Path, out: BinaryIO) -> tuple[int, int, int]:
+#: Compressing wrappers by file suffix; closing one leaves the file open.
+COMPRESSORS: dict[str, Compressor] = {
+    ".gz": lambda f: gzip.GzipFile(fileobj=f, mode="wb"),
+    ".bz2": lambda f: bz2.BZ2File(f, "wb"),
+    ".xz": lambda f: lzma.LZMAFile(f, "wb"),
+    ".zst": lambda f: zstd.ZstdFile(
+        f, "wb", options={zstd.CompressionParameter.checksum_flag: 1}
+    ),
+}
+COMPRESSORS[".zstd"] = COMPRESSORS[".zst"]
+
+
+def write_mbox(store: Path, out: BinaryIO | io.BufferedIOBase) -> tuple[int, int, int]:
     """Write the store's messages to ``out``; returns (messages, bytes,
     errors). A message that cannot be rebuilt is logged and left out."""
     seen: set[str] = set()
@@ -56,9 +75,14 @@ def run(args: argparse.Namespace, out: Output) -> int:
             messages, size, errors = write_mbox(store, sys.stdout.buffer)
             sys.stdout.buffer.flush()
         else:
+            compress = COMPRESSORS.get(target.suffix.lower())
             with open(target, "xb") as f:
                 try:
-                    messages, size, errors = write_mbox(store, f)
+                    if compress is None:
+                        messages, size, errors = write_mbox(store, f)
+                    else:
+                        with compress(f) as z:
+                            messages, size, errors = write_mbox(store, z)
                     f.flush()
                     os.fsync(f.fileno())
                 except BaseException:

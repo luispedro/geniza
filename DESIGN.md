@@ -977,8 +977,10 @@ only those (and only their stores are locked).
 `export --mbox PATH` writes every message of the store, rebuilt and
 checked against its id, to a new mboxrd file (`-` for stdout; an existing
 file is not overwritten), in store order and each message once, with the
-same `From` line and escaping as segment bodies. A message that cannot be
-rebuilt is reported and left out, and the exit status is non-zero.
+same `From` line and escaping as segment bodies. A file name ending in
+`.gz`, `.bz2`, `.xz`, `.zst` or `.zstd` is compressed with gzip, bzip2, xz
+or zstd. A message that cannot be rebuilt is reported and left out, and
+the exit status is non-zero.
 
 `verify` reads every record in full, re-hashes every attachment file a
 record names and checks it against the record, rebuilds every message and
