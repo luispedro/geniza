@@ -14,6 +14,7 @@ from geniza.store.journal import (
     Event,
     Fate,
     Flags,
+    Gone,
     JournalError,
     JournalWriter,
     Mbox,
@@ -97,6 +98,7 @@ events = st.one_of(
     ),
     st.builds(Remove, msg=msgs, mbox=mboxes, rid=rids),
     st.builds(Reset, mbox=mboxes, uidvalidity=st.integers(0, 3)),
+    st.builds(Gone, mbox=mboxes),
     st.builds(
         Promote,
         msg=msgs,
@@ -183,7 +185,7 @@ def test_design_examples_parse() -> None:
     )
     assert block
     lines = block[1].strip().splitlines()
-    assert len(lines) == 13
+    assert len(lines) == 14
     parsed = [
         decode_line(line.replace('"…"', '"2026-10-24T09:00:03Z"').encode())
         for line in lines
@@ -196,6 +198,7 @@ def test_design_examples_parse() -> None:
         Props,
         Remove,
         Reset,
+        Gone,
         Promote,
         Drop,
         Undrop,
@@ -306,6 +309,34 @@ def test_state_of_server_metadata() -> None:
     assert state.settings == {("SieveScript", "S1"): ({"name": "x"}, "keep;")}
     state.apply(replace(Props(msg=a, rid="M1", props={}), seq=10, ts=T0))
     assert state.props == {}
+
+
+def test_gone_mailbox() -> None:
+    a, b = "sha256:aa", "sha256:bb"
+    state = state_of(
+        stamp(
+            [
+                Mbox(mbox="P1", name="Old"),
+                Mbox(mbox="P2", name="Keep"),
+                Add(msg=a, mbox="P1", rid="1"),
+                Flags(msg=a, mbox="P1", set=frozenset({"x"})),
+                Props(msg=a, mbox="P1", rid="1", props={"y": 1}),
+                Add(msg=b, mbox="P2", rid="2"),
+                Reset(mbox="P1", uidvalidity=7),
+                Add(msg=a, mbox="P1", rid="3"),
+                Gone(mbox="P1"),
+                Gone(mbox="P3"),
+            ]
+        )
+    )
+    assert list(state.mailboxes) == ["P2"]
+    assert state.contents == {"P2": {"2": b}}
+    assert state.places == {b: {"P2": {"2"}}}
+    assert state.flags == {} and state.props == {}
+    # A mailbox of the same key can come back.
+    state.apply(replace(Mbox(mbox="P1", name="New"), seq=11, ts=T0))
+    assert state.mailboxes["P1"].name == "New"
+    assert state.mailboxes["P1"].uidvalidity is None
 
 
 def test_readding_keeps_flags() -> None:

@@ -234,6 +234,15 @@ class Reset(Event):
 
 
 @dataclass(frozen=True, kw_only=True)
+class Gone(Event):
+    """The mailbox ``mbox`` no longer exists on the server; whatever was
+    journaled in it is void."""
+
+    op = "gone"
+    mbox: str
+
+
+@dataclass(frozen=True, kw_only=True)
 class Promote(Event):
     op = "promote"
     msg: str
@@ -268,6 +277,7 @@ EVENTS: dict[str, type[Event]] = {
         Props,
         Remove,
         Reset,
+        Gone,
         Promote,
         Drop,
         Undrop,
@@ -382,13 +392,11 @@ class State:
             case Remove(mbox=mbox, rid=rid):
                 self._unplace(mbox, rid)
             case Reset(mbox=mbox, uidvalidity=uidvalidity):
-                for rid in list(self.contents.get(mbox, {})):
-                    self._unplace(mbox, rid)
-                for key in [k for k in self.flags if k[1] == mbox]:
-                    del self.flags[key]
-                for pkey in [k for k in self.props if k[0] == mbox]:
-                    del self.props[pkey]
+                self._void(mbox)
                 self.mailboxes.setdefault(mbox, Mailbox(mbox)).uidvalidity = uidvalidity
+            case Gone(mbox=mbox):
+                self._void(mbox)
+                self.mailboxes.pop(mbox, None)
             case Promote(msg=msg, ts=ts, segment=segment, offset=offset):
                 self.fates[msg] = Fate("promoted", ts, segment, offset)
             case Drop(msg=msg, ts=ts):
@@ -406,6 +414,15 @@ class State:
         if mbox not in self.places.get(msg, {}):
             return None
         return self.flags.get((msg, mbox), frozenset())
+
+    def _void(self, mbox: str) -> None:
+        """Forget every remote id, flag set and ``props`` of ``mbox``."""
+        for rid in list(self.contents.get(mbox, {})):
+            self._unplace(mbox, rid)
+        for key in [k for k in self.flags if k[1] == mbox]:
+            del self.flags[key]
+        for pkey in [k for k in self.props if k[0] == mbox]:
+            del self.props[pkey]
 
     def _unplace(self, mbox: str, rid: str) -> None:
         msg = self.contents.get(mbox, {}).pop(rid, None)

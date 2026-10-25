@@ -706,12 +706,13 @@ sync batch. Each line is one event:
 {"seq": 1044, "ts": "…", "op": "props",   "msg": "sha256:…", "rid": "M6d99ac3275bb4e", "props": {"snoozed": {"until": "2026-11-01T08:00:00Z"}}}
 {"seq": 1045, "ts": "…", "op": "remove",  "msg": "sha256:…", "mbox": "INBOX", "rid": "1234"}
 {"seq": 1046, "ts": "…", "op": "reset",   "mbox": "INBOX", "uidvalidity": 99}
-{"seq": 1047, "ts": "…", "op": "promote", "msg": "sha256:…", "segment": "segments/2026/2026-10.zst", "offset": 81920}
-{"seq": 1048, "ts": "…", "op": "drop",    "msg": "sha256:…"}
-{"seq": 1049, "ts": "…", "op": "undrop",  "msg": "sha256:…"}
-{"seq": 1050, "ts": "…", "op": "purge",   "msg": "sha256:…"}
-{"seq": 1051, "ts": "…", "op": "setting", "type": "SieveScript", "id": "S1", "value": {"id": "S1", "name": "main", "blobId": "…", "isActive": true}, "content": "require \"fileinto\";\n…"}
-{"seq": 1052, "ts": "…", "op": "setting", "type": "Identity", "id": "I2"}
+{"seq": 1047, "ts": "…", "op": "gone",    "mbox": "P2f"}
+{"seq": 1048, "ts": "…", "op": "promote", "msg": "sha256:…", "segment": "segments/2026/2026-10.zst", "offset": 81920}
+{"seq": 1049, "ts": "…", "op": "drop",    "msg": "sha256:…"}
+{"seq": 1050, "ts": "…", "op": "undrop",  "msg": "sha256:…"}
+{"seq": 1051, "ts": "…", "op": "purge",   "msg": "sha256:…"}
+{"seq": 1052, "ts": "…", "op": "setting", "type": "SieveScript", "id": "S1", "value": {"id": "S1", "name": "main", "blobId": "…", "isActive": true}, "content": "require \"fileinto\";\n…"}
+{"seq": 1053, "ts": "…", "op": "setting", "type": "Identity", "id": "I2"}
 ```
 
 The journal is meant to hold everything the server knows about the
@@ -748,6 +749,14 @@ threads).
   mailbox counters such as `totalEmails`) are left out, or every sync
   would journal them. A `props` event carries the full set, like `flags`;
   an empty set clears it, and it is written only when the set changed.
+- `gone` records that a mailbox no longer exists on the server (JMAP
+  `Mailbox/changes` lists it as destroyed; for IMAP, `LIST` no longer
+  shows it). A sync writes it after the `remove` events of the messages
+  that were in it, in the same batch. The journal keeps the mailbox's
+  history; the state no longer has it. A later `mbox` event with the same
+  key starts a new mailbox (JMAP ids are not reused; an IMAP name can be).
+  A mailbox whose parent is gone keeps its `parent` until an `mbox` event
+  says otherwise.
 - `setting` events hold the account's settings, one object each:
   `type` is its JMAP type name (`Identity`, `SieveScript`,
   `VacationResponse`), `value` the object verbatim, and for a Sieve script
@@ -760,7 +769,8 @@ threads).
   `mbox` sets a mailbox; `add`/`remove` set or clear the message at
   (`mbox`, `rid`); `flags` sets the flags of (`msg`, `mbox`); `props` the
   properties of (`mbox`, `rid`); `setting` sets or clears a setting
-  object; `reset` voids every `rid`, flag set and `props` of its mailbox; `promote`/`drop`/`purge` set a message's fate in the
+  object; `reset` voids every `rid`, flag set and `props` of its mailbox;
+  `gone` does the same and removes the mailbox; `promote`/`drop`/`purge` set a message's fate in the
   account's `incoming/` and `undrop` clears it. Replaying events that were
   already applied (twice, or re-derived after a crash) changes nothing.
 - Fates are per account, like `incoming/`: a message can be dropped from
@@ -875,7 +885,8 @@ from the session object, never hard-coded.
 
 1. Fetch the session; `Mailbox/changes` (or `Mailbox/get` initially) →
    `mbox` events (`name`, `parentId`, `role`, `sortOrder`, `isSubscribed`;
-   other properties into `props`, without the counters).
+   other properties into `props`, without the counters); destroyed
+   mailboxes → `gone`, after the `remove` events of step 4.
 2. `Email/changes` since `email_state` (fall back to a full `Email/query` on
    `cannotCalculateChanges`).
 3. `Email/get` on created and updated ids with
