@@ -9,7 +9,8 @@ design leaves open.
 
 ## Status
 
-- **M0–M4 done.** The M3 gate (`stats --parts` on real mail) is passed;
+- **M0–M4 done.** The M3 gate (`stats --parts`, now `debug parts`, on
+  real mail) is passed;
   the defaults and classification changes it led to are in DESIGN.md.
 - **M5 done.** Ingest, `debug import-local`, `show`, `export --mbox`
   and `verify` work, the "done when" run on real mail passed, and fault
@@ -33,7 +34,7 @@ design leaves open.
   and the vacation response), retries on rate limiting, and parallel
   downloads over kept connections. Left:
   extension properties (`props`), and the run against a real Fastmail
-  account (see M8).
+  account (see M8). `geniza info` summarizes a store from its index.
 
 ## Tooling
 
@@ -103,7 +104,8 @@ src/geniza/
     jmap_sync.py        # one JMAP account into the journal and store
     imap.py             # M9, after the first release
     matching.py         # stable ids and header-verified matching (M9)
-  stats.py              # stats --parts
+  stats.py              # debug parts
+  info.py               # info
   show.py               # show ID [--raw]
   search.py             # search QUERY…
   export.py             # export --mbox
@@ -175,7 +177,7 @@ and mode for each corpus message.
 **Done when:** each corpus case is classified as DESIGN.md says, and every
 part reported as stub reconstructs byte-exactly.
 
-### M3 — `geniza stats --parts` (first real output)
+### M3 — `geniza stats --parts` (first real output; now `debug parts`)
 
 - Reads a local **Maildir or mbox** with the stdlib `mailbox` module.
 - Reports per class: count, total size, size histogram; stub vs. copy vs.

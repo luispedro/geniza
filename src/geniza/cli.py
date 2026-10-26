@@ -55,7 +55,13 @@ def _cmd_sync(args: argparse.Namespace, out: Output) -> int:
     return base.run(args, out)
 
 
-def _cmd_stats(args: argparse.Namespace, out: Output) -> int:
+def _cmd_info(args: argparse.Namespace, out: Output) -> int:
+    from geniza import info
+
+    return info.run(args, out)
+
+
+def _cmd_parts(args: argparse.Namespace, out: Output) -> int:
     from geniza import stats
 
     return stats.run(args, out)
@@ -223,25 +229,9 @@ def build_parser() -> argparse.ArgumentParser:
         " in .gz, .bz2, .xz, .zst or .zstd",
     )
 
+    add("info", "summarize what the store holds", _cmd_info)
     add("reindex", "rebuild cache/ from store/", _cmd_reindex)
     add("verify", "re-hash messages and attachments", _cmd_verify)
-
-    p = add("stats", "dry-run part classification on a Maildir or mbox", _cmd_stats)
-    p.add_argument("--parts", action="store_true", required=True)
-    p.add_argument("path", type=Path, metavar="PATH", help="Maildir or mbox")
-    p.add_argument(
-        "--examples",
-        action="store_true",
-        help="also list identifying examples (paths, Message-IDs)",
-    )
-    p.add_argument(
-        "-j",
-        "--jobs",
-        type=int,
-        default=0,
-        metavar="N",
-        help="worker processes (default: one per CPU)",
-    )
 
     p = add("account", "manage accounts")
     asub = p.add_subparsers(dest="account_command", required=True)
@@ -275,6 +265,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     d.add_argument("path", type=Path, metavar="PATH", help="Maildir or mbox")
     d.set_defaults(handler=_cmd_import_local, command_name="debug import-local")
+    d = dsub.add_parser(
+        "parts",
+        help="dry-run part classification on a Maildir or mbox",
+        parents=[common],
+    )
+    d.add_argument("path", type=Path, metavar="PATH", help="Maildir or mbox")
+    d.add_argument(
+        "--examples",
+        action="store_true",
+        help="also list identifying examples (paths, Message-IDs)",
+    )
+    d.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=0,
+        metavar="N",
+        help="worker processes (default: one per CPU)",
+    )
+    d.set_defaults(handler=_cmd_parts, command_name="debug parts")
 
     return parser
 

@@ -22,7 +22,7 @@ def make_maildir(root: Path) -> Path:
 
 
 def run_json(capsys: pytest.CaptureFixture[str], *argv: str) -> dict:
-    assert cli.main(["stats", "--parts", "--json", "-j", "1", *argv]) == 0
+    assert cli.main(["debug", "parts", "--json", "-j", "1", *argv]) == 0
     return json.loads(capsys.readouterr().out)
 
 
@@ -75,7 +75,7 @@ def test_parallel_matches_serial(
 ) -> None:
     root = make_maildir(tmp_path / "mail")
     serial = run_json(capsys, str(root))
-    assert cli.main(["stats", "--parts", "--json", "-j", "2", str(root)]) == 0
+    assert cli.main(["debug", "parts", "--json", "-j", "2", str(root)]) == 0
     assert json.loads(capsys.readouterr().out) == serial
 
 
@@ -84,14 +84,14 @@ def test_output_identifies_nothing_without_examples(
 ) -> None:
     root = make_maildir(tmp_path / "mail")
     for extra in ([], ["--json"]):
-        assert cli.main(["stats", "--parts", "-j", "1", *extra, str(root)]) == 0
+        assert cli.main(["debug", "parts", "-j", "1", *extra, str(root)]) == 0
         text = capsys.readouterr().out
         assert "corpus-" not in text and "example.org" not in text
         assert str(tmp_path) not in text
-    assert cli.main(["stats", "--parts", "-j", "1", "--examples", str(root)]) == 0
+    assert cli.main(["debug", "parts", "-j", "1", "--examples", str(root)]) == 0
     assert "<corpus-0013@example.org>" in capsys.readouterr().out
 
 
 def test_missing_path(tmp_path: Path) -> None:
-    assert cli.main(["stats", "--parts", str(tmp_path / "nope")]) == 1
-    assert cli.main(["stats", "--parts", str(tmp_path)]) == 1
+    assert cli.main(["debug", "parts", str(tmp_path / "nope")]) == 1
+    assert cli.main(["debug", "parts", str(tmp_path)]) == 1

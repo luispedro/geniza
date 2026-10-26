@@ -286,6 +286,50 @@ def test_verify_reads_journals(
     assert len(report["problems"]) == 1
 
 
+def info(config: Path, capsys: pytest.CaptureFixture[str]) -> dict:
+    capsys.readouterr()
+    assert run(config, "--json", "info") == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def test_info(store: Path, config: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    report = info(config, capsys)
+    assert report["store"] == "test" and report["initialized"] is None
+    assert report["messages"] == report["in_segments"] == len(MSGS)
+    assert report["bytes"] == sum(map(len, MSGS))
+    assert (report["in_incoming"], report["dropped"], report["accounts"]) == (0, 0, [])
+    files = [store / f for _, f in attachments.scan(store)]
+    assert report["attachment_files"] == len(files)
+    assert report["attachment_bytes"] == sum(f.stat().st_size for f in files)
+    assert report["attachments"] + report["decorations"] == len(files)
+    assert report["segments"] == len(segment.segments(store))
+    assert report["text_read"] == 0
+    assert run(config, "search", "example") == 0
+    assert info(config, capsys)["text_read"] == len(MSGS)
+    assert run(config, "info") == 0
+    out = capsys.readouterr().out
+    assert out.startswith(f"store: test ({store})\n")
+    assert f"messages: {len(MSGS)} (" in out
+    assert "still initializing" in out and "accounts: 0\n" in out
+
+
+def test_info_counts_incoming(config: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    store = store_of(config)
+    a, b = MSGS[:2]
+    with StoreLock(store):
+        init_store(store)
+        incoming.open_dir(store, "acct")
+        for data in (a, b):
+            incoming.write(store, "acct", message_id(data), data, datetime.now(UTC))
+    JournalWriter(store, "acct").append([Drop(msg=message_id(b))])
+    report = info(config, capsys)
+    assert (report["messages"], report["in_incoming"], report["dropped"]) == (2, 2, 1)
+    [account] = report["accounts"]
+    assert account["name"] == "acct" and not account["configured"]
+    assert (account["held"], account["dropped"]) == (1, 1)
+    assert account["journal_events"] == 1 and account["last_sync"] is None
+
+
 def test_commands_need_a_store(
     config: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

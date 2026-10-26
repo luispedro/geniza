@@ -448,7 +448,7 @@ Attachments are what the sender meant to send, so they are extracted
 regardless of size: small `.py`, `.patch`, `.md` files are valuable on disk
 as-is. Decorations are extracted only when large.
 
-The default was chosen by running `geniza stats --parts` on a large
+The default was chosen by running `geniza debug parts` on a large
 mailbox and comparing the file count and the bytes left inline at
 several thresholds (16 KiB to 1 MiB). Lowering the threshold saves much
 more inline than it adds in files, because a pasted image is re-sent with
@@ -1324,13 +1324,14 @@ geniza search QUERY…           # messages matching every term, newest first
 geniza show ID [--raw]         # reconstruct the original message byte-exactly
 geniza export --mbox …         # full reconstruction to mbox
 geniza reindex                 # rebuild cache/ from store/
+geniza info                    # summarize what the store holds
 geniza verify                  # re-hash messages and attachments
-geniza stats --parts           # dry-run part classification on a mailbox
 geniza account rename OLD NEW
+geniza debug parts PATH        # dry-run part classification on a mailbox
 ```
 
 Global options: `--config PATH`, and `--store NAME` for commands that act on
-one store (`search`, `show`, `export`, `reindex`, `verify`). It may be
+one store (`search`, `show`, `export`, `info`, `reindex`, `verify`). It may be
 omitted when there is only one store or `default_store` is set. `sync`
 without arguments syncs every account of every store; with account names,
 only those (and only their stores are locked); with `--store`, only the
@@ -1366,6 +1367,21 @@ same `From` line and escaping as segment bodies. A file name ending in
 or zstd. A message that cannot be rebuilt is reported and left out, and
 the exit status is non-zero.
 
+`info` summarizes a store from its index, brought up to date first (as
+for `search`, but without reading message texts), so it does not read
+the store in full: `store.toml`'s format and creation time, when
+initialization ended (or that it has not), the number of messages and
+their size as received, how many are in segments and how many only in
+`incoming/` (and of those, dropped), the oldest and newest received
+times, the number and size of segments and of attachment files
+(attachments and decorations), how many message texts the body pass has
+read, and per account (those of the store in the configuration and any
+with a journal or `incoming/` directory) the messages in its mailboxes,
+the number of mailboxes, its held and dropped files in `incoming/`, its
+last journal `seq`, and the time of its last complete sync (when its
+`sync.json` was last written). It reports counts only, no addresses or
+subjects.
+
 `verify` reads every record in full, re-hashes every attachment file a
 record names and checks it against the record, rebuilds every message and
 compares its hash with its id, and reads every journal through. Each
@@ -1397,8 +1413,8 @@ an escape cannot be told, so it is kept. Running it again stores nothing new, so
 reporting every message as already stored, followed by a clean `verify`,
 shows that the store holds every source message byte for byte.
 
-`stats --parts` scans a mailbox (remote, or an existing Maildir/mbox) without
-storing anything and reports, per class, the number and size of parts, how
+`debug parts PATH` (development only) scans an existing Maildir or mbox
+without storing anything and reports, per class, the number and size of parts, how
 many would be stubbed vs. copied, the file count and inline bytes at
 several `decoration_min_size` values, and how often identical decorations
 repeat. It is meant to be written early, to set the defaults from real mail.
@@ -1422,8 +1438,8 @@ repeat. It is meant to be written early, to set the defaults from real mail.
 
 ## Open questions
 
-- Defaults for `max_age` and the mass-drop guard are guesses. `stats
-  --parts` cannot inform them: a Maildir has no server receive dates or
+- Defaults for `max_age` and the mass-drop guard are guesses. `debug
+  parts` cannot inform them: a Maildir has no server receive dates or
   deletion history.
 - A small share of base64 parts does not round-trip with a fixed line
   length. With `layout` and `pad_bits` (see "Recipes") nearly all of them

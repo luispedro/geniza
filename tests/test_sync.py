@@ -17,6 +17,7 @@ from jmapserver import SETTINGS, TOKEN, FakeJmap, fake_jmap
 
 from geniza import cli
 from geniza.config import Config, is_initialized, parse
+from geniza.info import info
 from geniza.store import incoming, journal, segment
 from geniza.store.ingest import message_id
 from geniza.store.journal import Add, Flags, Gone, Mbox, Remove, Setting
@@ -631,6 +632,27 @@ def test_cli(env: Env, capsys: pytest.CaptureFixture[str]) -> None:
     assert report["complete"] and report["downloaded"] == 0 and not report["full"]
     assert cli.main(["--config", str(config), "sync", "other"]) == 2
     assert "no account 'other'" in capsys.readouterr().err
+
+
+def test_info(env: Env, capsys: pytest.CaptureFixture[str]) -> None:
+    env.fake.add_email(message(1), {env.inbox, env.archive}, received=OLD)
+    env.fake.add_email(message(2), {env.inbox}, received=NOW - DAY)
+    env.sync()
+    store = env.config.stores["s"]
+    result = info(store.path, store.cache, "s", {"acct", "other"})
+    assert result.initialized == "2026-10-20T12:00:00Z"
+    assert (result.messages, result.in_segments, result.in_incoming) == (2, 1, 1)
+    acct, other = result.accounts
+    assert (acct.name, acct.configured, acct.messages, acct.mailboxes) == (
+        "acct",
+        True,
+        2,
+        3,
+    )
+    assert (acct.held, acct.dropped) == (1, 0)
+    assert acct.journal_events == len(env.events())
+    assert acct.last_sync is not None
+    assert other.text() == "other: never synced"
 
 
 # --- property test -------------------------------------------------------

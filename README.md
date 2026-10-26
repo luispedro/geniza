@@ -64,20 +64,20 @@ cd geniza
 pixi run geniza --help
 ```
 
-`stats --parts` scans an existing Maildir or mbox, writes nothing, and
+`debug parts` scans an existing Maildir or mbox, writes nothing, and
 reports how its MIME parts would be classified and stored (counts, sizes,
 which attachments would become files):
 
 ```sh
-pixi run geniza stats --parts ~/Maildir
+pixi run geniza debug parts ~/Maildir
 ```
 
 Its output identifies no messages unless `--examples` is given.
 
 To try the store itself, point a configuration (see "Configuration" in
 `DESIGN.md`) at a scratch store and fill it with
-`geniza debug import-local ~/Maildir`; then `show ID`, `export --mbox` and
-`verify` work on it. `import-local` is for development only: it records no
+`geniza debug import-local ~/Maildir`; then `info`, `show ID`, `export --mbox`
+and `verify` work on it. `import-local` is for development only: it records no
 mailboxes or flags, and a store meant for real use is filled by sync.
 
 ## Development

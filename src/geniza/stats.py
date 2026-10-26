@@ -1,4 +1,4 @@
-"""``geniza stats --parts``: dry-run part classification over local mail.
+"""``geniza debug parts``: dry-run part classification over local mail.
 
 Reads a Maildir (or a tree of Maildirs, as offlineimap writes them) or an
 mbox, classifies every part as ingest would, and reports aggregate numbers:
