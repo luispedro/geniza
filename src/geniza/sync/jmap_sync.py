@@ -14,6 +14,12 @@ Excluded mailboxes (``[accounts.<name>.sync] exclude``) get ``mbox``
 events like the others, but nothing is added to them and no message is
 downloaded for them; a message leaving one is still journaled as removed.
 
+Last come the settings (identities, Sieve scripts with their text, the
+vacation response), each type when the session offers its capability:
+they are listed in full every run and journaled as ``setting`` events
+when they differ from the journal. Failing to sync them does not make
+the run incomplete, since no cursor depends on them.
+
 The caller holds the store lock, evaluates ``incoming/`` after a complete
 run and writes the returned cursors to ``sync.json``.
 """
@@ -36,6 +42,7 @@ from geniza.store.journal import (
     JournalWriter,
     Mbox,
     Remove,
+    Setting,
     State,
 )
 from geniza.store.segment import parse_time
@@ -58,6 +65,8 @@ EMAIL_PROPERTIES = (
 )  # fmt: skip
 #: Emails fetched, stored and journaled per batch.
 BATCH = 256
+#: Setting types journaled, each when the session has its capability.
+SETTING_TYPES = ("Identity", "SieveScript", "VacationResponse")
 
 
 @dataclass
@@ -74,8 +83,12 @@ class Progress:
     stored: int = 0
     held: int = 0
     events: int = 0
+    #: ``setting`` events written.
+    settings: int = 0
     #: Emails that could not be stored; any makes the run incomplete.
     problems: list[str] = field(default_factory=list)
+    #: Settings that could not be synced; the run stays complete.
+    setting_problems: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -138,6 +151,7 @@ class JmapSync:
         new_mailbox_state, gone = self._mailboxes(mailbox_state)
         new_email_state, removed = self._emails(email_state)
         self._finish(removed, gone)
+        self._settings()
         return Cursors(new_email_state, new_mailbox_state)
 
     def _write(self, events: Iterable[Event]) -> None:
@@ -355,3 +369,62 @@ class JmapSync:
         events += [Gone(mbox=m) for m in gone]
         self.progress.mailboxes += len(gone)
         self._write(events)
+
+    # --- settings ---------------------------------------------------------
+
+    def _settings(self) -> None:
+        """Journal the settings of each type the session offers. Journaled
+        objects of a type it does not offer are left as they are: the
+        server did not say they are gone."""
+        for type_ in SETTING_TYPES:
+            if not self.client.session.has(type_):
+                log.info("%s: no %s capability; not synced", self.account, type_)
+                continue
+            try:
+                self._write(self._setting_events(type_))
+            except JmapError as e:
+                self.progress.setting_problems.append(f"{type_}: {e}")
+
+    def _setting_events(self, type_: str) -> list[Event]:
+        events: list[Event] = []
+        listed: set[str] = set()
+        for obj in self.client.get(type_).objects:
+            id_ = _check(obj.get("id"), str, f"{type_} id")
+            listed.add(id_)
+            journaled = self.state.settings.get((type_, id_))
+            # A blob never changes, so neither does the text of a script
+            # whose object (with its blobId) is unchanged.
+            if journaled is not None and journaled[0] == obj:
+                continue
+            content = None
+            if type_ == "SieveScript":
+                content = self._script(id_, obj)
+                if content is None:
+                    continue
+            events.append(Setting(type=type_, id=id_, value=obj, content=content))
+        events += [
+            Setting(type=t, id=id_)
+            for t, id_ in sorted(self.state.settings)
+            if t == type_ and id_ not in listed
+        ]
+        self.progress.settings += len(events)
+        return events
+
+    def _script(self, id_: str, obj: Json) -> str | None:
+        """The text of a Sieve script; None (a problem) if it cannot be
+        had, so the script is tried again next run."""
+        blob = _check(obj.get("blobId"), str, "SieveScript blobId")
+        try:
+            data = self.client.download(
+                blob, name="script.siv", type_="application/sieve"
+            )
+        except JmapError as e:
+            self.progress.setting_problems.append(f"SieveScript {id_}: {e}")
+            return None
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            self.progress.setting_problems.append(
+                f"SieveScript {id_}: not UTF-8; not journaled"
+            )
+            return None

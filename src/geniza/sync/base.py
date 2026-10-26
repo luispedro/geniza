@@ -196,7 +196,8 @@ class Report:
 
     @property
     def problems(self) -> list[str]:
-        return self.progress.problems + (self.applied.problems if self.applied else [])
+        applied = self.applied.problems if self.applied else []
+        return self.progress.problems + applied + self.progress.setting_problems
 
     @property
     def ok(self) -> bool:
@@ -216,6 +217,7 @@ class Report:
             "stored": p.stored,
             "held": p.held,
             "events": p.events,
+            "settings": p.settings,
             "incoming": None
             if a is None
             else {
@@ -237,7 +239,7 @@ class Report:
             f"{self.account}: {listing}{p.mailboxes} mailbox changes,"
             f" {p.emails} emails changed, {p.downloaded} downloaded"
             f" ({p.bytes} bytes): {p.stored} stored, {p.held} held;"
-            f" {p.events} events"
+            f" {p.settings} setting changes; {p.events} events"
         ]
         if a is not None:
             lines.append(

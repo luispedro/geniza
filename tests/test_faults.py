@@ -44,6 +44,7 @@ from geniza.store.journal import (
     Mbox,
     Promote,
     Purge,
+    Setting,
     State,
     read_events,
     replay,
@@ -242,6 +243,9 @@ def stage_0(fake: FakeJmap, ids: dict[str, str]) -> None:
     archive = fake.add_mailbox("Archive", "archive")
     trash = fake.add_mailbox("Trash", "trash")
     ids |= {"inbox": inbox, "archive": archive, "trash": trash}
+    fake.enable_settings()
+    ids["identity"] = fake.set_setting("Identity", name="A", email="a@example.org")
+    ids["sieve"] = fake.set_sieve(b"keep;\r\n")
     for name, box, received in [
         ("plain_text_lf", inbox, OLD),
         ("base64_76_crlf", archive, OLD),
@@ -264,6 +268,8 @@ def stage_1(fake: FakeJmap, ids: dict[str, str]) -> None:
 
 
 def stage_2(fake: FakeJmap, ids: dict[str, str]) -> None:
+    fake.destroy_setting("Identity", ids["identity"])
+    fake.set_sieve(b"discard;\r\n", ids["sieve"])
     fake.update_email(ids["smime_signed"], mailboxes={ids["archive"]})
     fake.update_email(ids["apple_inline"], keywords=set())
 
@@ -353,7 +359,7 @@ def sync_expected(tmp_path_factory: pytest.TempPathFactory) -> Outcome:
     assert not report.orphans
     assert is_initialized(store)
     kinds = {type(e) for e in read_events(store, ACCOUNT)}
-    assert {Gone, Promote, Drop, Purge} <= kinds
+    assert {Gone, Promote, Drop, Purge, Setting} <= kinds
     result = outcome(root)
     assert result.sync.jmap and result.held
     return result

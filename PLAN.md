@@ -29,8 +29,9 @@ design leaves open.
   mailboxes and emails into the journal, downloads, `sync.json`,
   evaluation, the end of initialization), tested against an in-process
   fake server (`tests/jmapserver.py`), including fault injection of whole
-  syncs. Left: settings (`setting` events), extension properties
-  (`props`), and the run against a real Fastmail account (see M8).
+  syncs, and settings (`setting` events for identities, Sieve scripts
+  and the vacation response). Left: extension properties (`props`), and
+  the run against a real Fastmail account (see M8).
 
 ## Tooling
 
@@ -470,6 +471,18 @@ longer count. It also found that a torn journal tail could keep an `add`
 and lose the empty `flags` event after it, leaving a replayed state that
 differed from a crash-free run's only in that empty set; replay now
 treats an empty set as none, as it already did for `props`.
+
+Progress: settings. After the emails, a run lists the identities, Sieve
+scripts and vacation response, each when the session offers its
+capability, and journals each object that is new or changed (a script
+with its text, downloaded only when its object changed) and each one
+gone. Their failures (a `get` refused, a script that cannot be
+downloaded or is not UTF-8) are reported without making the run
+incomplete. The fake server serves the three types, checks each
+method's capability in `using` and on the account, and the tests cover
+changes, a missing capability (journaled settings stay), the failures,
+random settings changes in the property test, and settings in the fault
+scenario.
 
 ### M9 — IMAP sync (after the first release)
 

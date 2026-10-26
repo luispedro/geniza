@@ -926,7 +926,10 @@ left out; the run goes on but is then partial: the account's `incoming/`
 is not evaluated and its `sync.json` is not rewritten, so the next run
 starts from the same cursors and tries again. An error that stops the
 run (the server unreachable, a bad reply, a secret that does not
-resolve) does the same for that account only.
+resolve) does the same for that account only. Settings are the
+exception: no cursor depends on them (they are listed in full every
+run), so one that cannot be synced is reported, and makes `geniza sync`
+exit non-zero, but leaves the run complete.
 
 ### IMAP (per mailbox)
 
@@ -980,8 +983,17 @@ from the session object, never hard-coded.
    blobs (`urn:ietf:params:jmap:sieve`), `VacationResponse/get`
    (`urn:ietf:params:jmap:vacationresponse`). Each object that is new or
    differs from the replayed journal → `setting`; each journaled object
-   the server no longer has → `setting` without `value`. Which of these
-   Fastmail offers, and to which token scopes, is to be checked in M8.
+   the server no longer has → `setting` without `value`. A script's text
+   (`content`, which must be UTF-8, as RFC 5228 requires) is downloaded
+   only when its object differs from the journaled one: blobs never
+   change, so the same `blobId` is the same text. A type whose capability
+   the session lacks is skipped (reported at `-v`), and its journaled
+   objects are left as they are, since the server did not say they are
+   gone. A type whose `get` fails, or a script that cannot be downloaded
+   or is not UTF-8, is a problem of the settings only (see
+   [Sync](#sync)); a script left out is tried again next run. Which of
+   these Fastmail offers, and to which token scopes, is to be checked in
+   M8.
 
 The account synced is the session's primary mail account. The token is
 sent only to https URLs (http only to loopback, as for `url`), including

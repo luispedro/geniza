@@ -3,7 +3,11 @@
 It serves one account over loopback HTTP (stdlib ``http.server``): the
 session object, ``Mailbox``/``Email`` ``get`` and ``changes``,
 ``Email/query`` (sorted by ``receivedAt``, with ``position`` or
-``anchor``), and blob downloads. Tests change the account through
+``anchor``), ``get`` of the settings types (``Identity``,
+``SieveScript``, ``VacationResponse``) once ``enable_settings`` gave the
+account their capabilities, and blob downloads (emails and Sieve
+scripts). A method whose capability the request's ``using`` or the
+account lacks is ``unknownMethod``. Tests change the account through
 ``FakeJmap`` methods, which keep a change log so ``*/changes`` can answer
 from any earlier state. Every method name received is recorded in
 ``methods``, every downloaded blob in ``downloads``; a method that would
@@ -28,6 +32,12 @@ ACCOUNT = "A1"
 
 CORE = "urn:ietf:params:jmap:core"
 MAIL = "urn:ietf:params:jmap:mail"
+#: Capability of each settings type.
+SETTINGS = {
+    "Identity": "urn:ietf:params:jmap:submission",
+    "SieveScript": "urn:ietf:params:jmap:sieve",
+    "VacationResponse": "urn:ietf:params:jmap:vacationresponse",
+}
 
 EMAIL_PROPERTIES = (
     "id", "blobId", "threadId", "mailboxIds", "keywords", "receivedAt", "size",
@@ -90,6 +100,9 @@ class FakeJmap:
         self.lock = threading.Lock()
         self.mailboxes: dict[str, Json] = {}
         self.emails: dict[str, FakeEmail] = {}
+        #: Settings objects by type and id; Sieve scripts' blobs by id.
+        self.settings: dict[str, dict[str, Json]] = {t: {} for t in SETTINGS}
+        self.sieve_blobs: dict[str, bytes] = {}
         self.logs = {"Mailbox": _Log(), "Email": _Log()}
         self.methods: list[str] = []
         self.downloads: list[str] = []
@@ -109,8 +122,10 @@ class FakeJmap:
         self.before_query: Callable[[Json], None] | None = None
         #: Email ids whose download is one byte short.
         self.truncate: set[str] = set()
-        #: Email ids whose download fails (HTTP 500).
+        #: Email and Sieve script ids whose download fails (HTTP 500).
         self.fail: set[str] = set()
+        #: Method names answered with a ``forbidden`` error.
+        self.forbidden: set[str] = set()
         self.url = ""
 
     def _id(self, prefix: str) -> str:
@@ -169,6 +184,35 @@ class FakeJmap:
             del self.emails[id_]
             self.logs["Email"].entries.append(("destroyed", id_))
 
+    def enable_settings(self, *types: str) -> None:
+        """Give the account the capabilities of settings types (all by
+        default)."""
+        for type_ in types or SETTINGS:
+            self.extra_capabilities[SETTINGS[type_]] = {}
+
+    def set_setting(self, type_: str, id_: str | None = None, **props: Any) -> str:
+        """Create a settings object, or replace one's properties."""
+        with self.lock:
+            id_ = id_ or self._id(type_[0])
+            self.settings[type_][id_] = {"id": id_} | props
+            return id_
+
+    def destroy_setting(self, type_: str, id_: str) -> None:
+        with self.lock:
+            del self.settings[type_][id_]
+            self.sieve_blobs.pop(id_, None)
+
+    def set_sieve(self, content: bytes, id_: str | None = None,
+                  name: str = "script", active: bool = True) -> str:  # fmt: skip
+        """Create a Sieve script, or replace one's text (a new blob)."""
+        blob_id = "S" + hashlib.sha256(content).hexdigest()[:40]
+        id_ = self.set_setting(
+            "SieveScript", id_, name=name, blobId=blob_id, isActive=active
+        )
+        with self.lock:
+            self.sieve_blobs[id_] = content
+        return id_
+
     def forget_changes(self) -> None:
         """Make ``*/changes`` from any earlier state fail with
         ``cannotCalculateChanges``."""
@@ -209,12 +253,21 @@ class FakeJmap:
 
     def api(self, request: Json) -> Json:
         responses = []
+        using = request.get("using") or []
         for name, args, call_id in request["methodCalls"]:
             self.methods.append(name)
             if name == "Email/query" and self.before_query:
                 self.before_query(args)
             with self.lock:
                 try:
+                    type_ = name.split("/")[0]
+                    capability = SETTINGS.get(type_, MAIL)
+                    if capability not in using or (
+                        type_ in SETTINGS and capability not in self.extra_capabilities
+                    ):
+                        raise _Error("unknownMethod")
+                    if name in self.forbidden:
+                        raise _Error("forbidden")
                     if args.get("accountId") != ACCOUNT:
                         raise _Error("accountNotFound")
                     result = self._method(name, args)
@@ -235,13 +288,20 @@ class FakeJmap:
                 return self._changes(name.split("/")[0], args)
             case "Email/query":
                 return self._query(args)
+            case "Identity/get" | "SieveScript/get" | "VacationResponse/get":
+                type_ = name.split("/")[0]
+                return self._get(type_, self.settings[type_], args, None)
         raise _Error("unknownMethod")
 
     def _get(self, type_: str, objects: dict[str, Json], args: Json,
-             known: tuple[str, ...]) -> Json:  # fmt: skip
+             known: tuple[str, ...] | None) -> Json:  # fmt: skip
         ids = args.get("ids")
         props = args.get("properties")
-        if props is not None and any(p not in known for p in props):
+        if (
+            props is not None
+            and known is not None
+            and any(p not in known for p in props)
+        ):
             raise _Error("invalidArguments")
         if ids is None:
             ids = list(objects)
@@ -253,7 +313,8 @@ class FakeJmap:
             found = [{p: o[p] for p in o if p == "id" or p in props} for o in found]
         return {
             "accountId": ACCOUNT,
-            "state": str(self.logs[type_].state),
+            # Settings keep no change log: their state is unused.
+            "state": str(self.logs[type_].state) if type_ in self.logs else "0",
             "list": found,
             "notFound": [i for i in ids if i not in objects],
         }
@@ -322,6 +383,12 @@ class FakeJmap:
                     if e.id in self.fail:
                         raise _Error("serverFail")
                     return e.blob[:-1] if e.id in self.truncate else e.blob
+            for id_, script in self.settings["SieveScript"].items():
+                if script["blobId"] == blob_id and id_ in self.sieve_blobs:
+                    self.downloads.append(blob_id)
+                    if id_ in self.fail:
+                        raise _Error("serverFail")
+                    return self.sieve_blobs[id_]
         return None
 
 

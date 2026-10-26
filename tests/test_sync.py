@@ -13,13 +13,13 @@ from typing import Any
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-from jmapserver import TOKEN, FakeJmap, fake_jmap
+from jmapserver import SETTINGS, TOKEN, FakeJmap, fake_jmap
 
 from geniza import cli
 from geniza.config import Config, is_initialized, parse
 from geniza.store import incoming, journal, segment
 from geniza.store.ingest import message_id
-from geniza.store.journal import Add, Flags, Gone, Mbox, Remove
+from geniza.store.journal import Add, Flags, Gone, Mbox, Remove, Setting
 from geniza.sync.base import Report, SyncFile, read_sync, sync_path, sync_store
 from geniza.sync.jmap import READ_ONLY, Client
 from geniza.verify import verify
@@ -137,6 +137,17 @@ def check_journal(store: Path, fake: FakeJmap, exclude: tuple[str, ...] = ()) ->
         for rid, msg in rids.items()
     }
     assert got == expected
+
+
+def check_settings(store: Path, fake: FakeJmap) -> None:
+    """The replayed journal has the server's settings, with the text of
+    each Sieve script."""
+    expected = {
+        (t, id_): (obj, fake.sieve_blobs[id_].decode() if t == "SieveScript" else None)
+        for t, objects in fake.settings.items()
+        for id_, obj in objects.items()
+    }
+    assert journal.replay(store, "acct").settings == expected
 
 
 def read_only(fake: FakeJmap) -> bool:
@@ -504,6 +515,89 @@ def test_records_go_by_received_month_until_initialized(env: Env) -> None:
     ]
 
 
+# --- settings ------------------------------------------------------------
+
+
+def settings_events(env: Env) -> list[Setting]:
+    return [e for e in env.events() if isinstance(e, Setting)]
+
+
+def test_settings(env: Env) -> None:
+    fake = env.fake
+    fake.enable_settings()
+    identity = fake.set_setting("Identity", name="A", email="a@example.org")
+    other = fake.set_setting("Identity", name="B", email="b@example.org")
+    script = fake.set_sieve(b'require "fileinto";\r\nkeep;\r\n')
+    fake.set_setting("VacationResponse", "singleton", isEnabled=False, subject=None)
+    report = env.sync()
+    assert report.ok and report.progress.settings == 4
+    check_settings(env.store, fake)
+    [event] = [e for e in settings_events(env) if e.type == "SieveScript"]
+    assert event.content == 'require "fileinto";\r\nkeep;\r\n'
+
+    # Nothing changed: no events, and the script is not downloaded again.
+    downloads = len(fake.downloads)
+    report = env.sync()
+    assert report.ok and report.progress.settings == 0
+    assert len(fake.downloads) == downloads
+
+    fake.set_setting("Identity", identity, name="A2", email="a@example.org")
+    fake.destroy_setting("Identity", other)
+    fake.set_sieve(b"discard;\n", script)
+    fake.set_setting("VacationResponse", "singleton", isEnabled=True, subject="Away")
+    report = env.sync()
+    assert report.ok and report.progress.settings == 4
+    check_settings(env.store, fake)
+    assert any(e.id == other and e.value is None for e in settings_events(env))
+    assert len(fake.downloads) == downloads + 1
+    assert read_only(fake)
+
+
+def test_settings_without_their_capability(env: Env) -> None:
+    fake = env.fake
+    fake.set_setting("Identity", name="A")
+    assert env.sync().ok
+    assert not any(m.split("/")[0] in SETTINGS for m in fake.methods)
+    assert settings_events(env) == []
+
+    # Journaled settings stay when the capability goes away.
+    fake.enable_settings("Identity", "VacationResponse")
+    assert env.sync().ok
+    assert len(settings_events(env)) == 1
+    assert not any(m.startswith("SieveScript/") for m in fake.methods)
+    fake.extra_capabilities.clear()
+    fake.settings["Identity"].clear()
+    assert env.sync().ok
+    assert len(settings_events(env)) == 1
+    assert len(env.state().settings) == 1
+
+
+def test_setting_problems_leave_the_run_complete(env: Env) -> None:
+    fake = env.fake
+    fake.enable_settings()
+    fake.add_email(message(1), {env.inbox}, received=OLD)
+    script = fake.set_sieve(b"keep;\n")
+    bad = fake.set_sieve(b"# caf\xe9\nkeep;\n", name="latin-1")
+    fake.set_setting("VacationResponse", "singleton", isEnabled=False)
+    fake.fail.add(script)
+    fake.forbidden.add("Identity/get")
+    report = env.sync()
+    assert report.complete and not report.ok
+    assert len(report.problems) == 3, report.problems
+    assert any("Identity" in p and "forbidden" in p for p in report.problems)
+    assert any(bad in p and "not UTF-8" in p for p in report.problems)
+    # The other settings, the mail and the cursors are synced all the same.
+    assert [e.type for e in settings_events(env)] == ["VacationResponse"]
+    assert read_sync(env.store, "acct").jmap
+    assert "problem: SieveScript" in report.text()
+
+    fake.fail.clear()
+    fake.forbidden.clear()
+    fake.destroy_setting("SieveScript", bad)
+    assert env.sync().ok
+    check_settings(env.store, fake)
+
+
 # --- the command ---------------------------------------------------------
 
 
@@ -539,6 +633,10 @@ action = st.one_of(
     ),
     st.tuples(st.just("destroy"), email),
     st.tuples(st.just("rename"), box),
+    st.tuples(st.just("identity"), st.integers(0, 2), st.sampled_from(["A", "B"])),
+    st.tuples(st.just("unidentity"), st.integers(0, 2)),
+    st.tuples(st.just("sieve"), st.integers(0, 1), st.sampled_from(["keep;", "é"])),
+    st.tuples(st.just("unsieve"), st.integers(0, 1)),
     st.tuples(st.just("forget")),
     st.tuples(st.just("lose")),
     st.tuples(st.just("sync")),
@@ -552,6 +650,9 @@ def test_sync_follows_the_server(actions: list[tuple[Any, ...]], exclude: bool) 
     the server, and no body is downloaded twice."""
     with tempfile.TemporaryDirectory() as tmp, fake_jmap() as fake:
         root = Path(tmp)
+        fake.enable_settings()
+        identities: dict[int, str] = {}
+        scripts: dict[int, str] = {}
         boxes = [
             fake.add_mailbox(n, n.lower() if n != "Archive" else None)
             for n in BOX_NAMES
@@ -570,6 +671,7 @@ def test_sync_follows_the_server(actions: list[tuple[Any, ...]], exclude: bool) 
             )  # fmt: skip
             assert report.ok, report.text()
             check_journal(store.path, fake, excluded)
+            check_settings(store.path, fake)
 
         for a in [*actions, ("sync",)]:
             match a:
@@ -591,13 +693,25 @@ def test_sync_follows_the_server(actions: list[tuple[Any, ...]], exclude: bool) 
                     fake.update_mailbox(
                         boxes[b], name=f"{BOX_NAMES[b]}-{len(fake.methods)}"
                     )
+                case ("identity", i, name):
+                    identities[i] = fake.set_setting(
+                        "Identity", identities.get(i), name=name
+                    )
+                case ("unidentity", i) if i in identities:
+                    fake.destroy_setting("Identity", identities.pop(i))
+                case ("sieve", i, text):
+                    scripts[i] = fake.set_sieve(text.encode(), scripts.get(i))
+                case ("unsieve", i) if i in scripts:
+                    fake.destroy_setting("SieveScript", scripts.pop(i))
                 case ("forget",):
                     fake.forget_changes()
                 case ("lose",):
                     sync_path(store.path, "acct").unlink(missing_ok=True)
                 case ("sync",):
                     sync()
-        # Each body once, unless excluded at first (never downloaded then).
-        assert len(fake.downloads) == len(set(fake.downloads))
+        # Each body once, unless excluded at first (never downloaded then);
+        # a script's text is the same blob when set again to the same text.
+        bodies = [d for d in fake.downloads if d.startswith("G")]
+        assert len(bodies) == len(set(bodies))
         assert read_only(fake)
         assert verify(store.path).problems == []
