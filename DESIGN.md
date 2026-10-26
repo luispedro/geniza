@@ -1171,8 +1171,7 @@ into terms again, so quotes belong to the query (`geniza search
 - `-` before a term negates it. On the command line, negated terms go
   after `--` or inside a quoted query (`geniza search -- -subject:re`).
 
-Messages only in `incoming/` are found too (`show` cannot print them
-yet); dropped ones, during their grace period, only with `--dropped`
+Messages only in `incoming/` are found too; dropped ones, during their grace period, only with `--dropped`
 (see [Evaluation](#evaluation)). The output is one line per message: the
 first 12 hex digits of its id (enough for `show`), its date, `From` and
 `Subject`; `--json` gives the full id, `To`, thread number, location and
@@ -1247,8 +1246,13 @@ its kind, mode and file, then the message text and that of each attached
 message, with its headers (see [Message text](#message-text); `--json`
 gives the same as an object, with the parts as the record header has
 them). The id is looked up in the index,
-which is brought up to date first; a message only in `incoming/` is not
-found (yet).
+which is brought up to date first. A message only in `incoming/`
+(dropped ones included) is read from the file of the first account, by
+name, whose file has its hash; its summary names that file (`held:
+incoming/ACCOUNT/HEX.eml`, with `(dropped)` if every account holding it
+dropped it) and the file's received time and size instead of a record,
+and lists no parts. A sync that promotes it between the index update and
+the read makes `show` fail; run again, it finds the record.
 
 `export --mbox PATH` writes every message of the store, rebuilt and
 checked against its id, to a new mboxrd file (`-` for stdout; an existing

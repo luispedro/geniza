@@ -19,10 +19,10 @@ design leaves open.
   `incoming/`), threading, message text, which `show` prints, the body
   pass and `search` work, and the "done when" holds: an updated index
   searches like a rebuilt one (see M6). Attachment text is left for later.
-- **M7 in progress.** Placement, evaluation and its application work and
-  are tested against a fake source, and `verify` checks `incoming/` and
-  the journals against the store (see M7). Next: `show` of a message
-  only in `incoming/`.
+- **M7 done.** Placement, evaluation and its application work and are
+  tested against a fake source, `verify` checks `incoming/` and the
+  journals against the store, and `show` prints messages only in
+  `incoming/` (see M7). Next: M8, JMAP sync.
 
 ## Tooling
 
@@ -352,7 +352,8 @@ segment or the account's `incoming/`, unless purged) and promotions must
 name a record of their message; the property test runs it after every
 evaluation. A held copy is unlinked only after its segment record has
 been rebuilt and hashed, and the fraction rule of the mass-drop guard
-applies only above 10 drops.
+applies only above 10 drops. `show` reads a message only in `incoming/`
+from the first account's file that has its hash.
 
 ### M8 — JMAP sync
 

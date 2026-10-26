@@ -14,11 +14,13 @@ import pytest
 from conftest import corpus_files
 
 from geniza import cli, show
+from geniza.config import init_store
 from geniza.debug import _from_date, received_date
 from geniza.mime.text import texts
-from geniza.store import attachments, reader, segment
+from geniza.store import attachments, incoming, reader, segment
 from geniza.store.attachments import AttachmentWriter
 from geniza.store.ingest import message_id
+from geniza.store.journal import Drop, JournalWriter
 from geniza.store.lock import StoreLock
 from geniza.store.segment import unescape
 
@@ -361,6 +363,55 @@ def test_show_after_another_import(
         assert run(config, "show", "--raw", message_id(data)) == 0
         assert capsysbinary.readouterr().out.endswith(data)
     assert (config.parent / "cache" / "index.sqlite").exists()
+
+
+def test_show_held(config: Path, capsysbinary: pytest.CaptureFixture[bytes]) -> None:
+    """A message only in incoming/ is read from the file there: the first
+    account's whose file has the right hash."""
+    store = store_of(config)
+    data = next(m for m in MSGS if texts(m)[0].text)
+    id = message_id(data)
+    received = datetime(2026, 10, 1, 12, tzinfo=UTC)
+    with StoreLock(store):
+        init_store(store)
+        for account in ("a", "b"):
+            incoming.open_dir(store, account)
+            incoming.write(store, account, id, data, received)
+    JournalWriter(store, "b").append([Drop(msg=id)])
+    capsysbinary.readouterr()
+    assert run(config, "--json", "show", id[7:20]) == 0
+    info = json.loads(capsysbinary.readouterr().out)
+    assert info["location"] == "incoming"
+    assert info["file"] == f"incoming/a/{id[7:]}.eml"
+    assert (info["state"], info["parts"]) == ("live", [])
+    assert info["received"] == "2026-10-01T12:00:00Z"
+    assert (info["size"], info["text"]) == (len(data), texts(data)[0].text)
+    assert run(config, "show", id) == 0
+    out = capsysbinary.readouterr().out.decode()
+    assert out.startswith(
+        f"id: {id}\nheld: incoming/a/{id[7:]}.eml\n"
+        f"received: 2026-10-01T12:00:00Z\nsize: {len(data)} bytes\n"
+    )
+    assert "record:" not in out
+    # A's file holds another message: b's is read instead.
+    first = incoming.file_path(store, "a", id)
+    first.unlink()
+    first.write_bytes(data + b"x")
+    assert run(config, "show", id) == 0
+    assert f"held: incoming/b/{id[7:]}.eml\n" in capsysbinary.readouterr().out.decode()
+    assert run(config, "show", "--raw", id) == 0
+    assert capsysbinary.readouterr().out == data
+    # Dropped by every account holding it.
+    JournalWriter(store, "a").append([Drop(msg=id)])
+    assert run(config, "show", id) == 0
+    assert f"held: incoming/b/{id[7:]}.eml (dropped)\n" in (
+        capsysbinary.readouterr().out.decode()
+    )
+    incoming.file_path(store, "b", id).unlink()
+    assert run(config, "show", id) == 1
+    err = capsysbinary.readouterr().err.decode()
+    assert "not in incoming/" in err
+    assert "holds another message" in err
 
 
 def test_show_errors(
