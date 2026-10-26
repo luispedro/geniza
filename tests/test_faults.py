@@ -11,25 +11,46 @@ The store must then pass ``verify`` once a writer has opened it, and
 running the scenario again must give the store a crash-free run gives: the
 same messages, each recorded once, the same replayed journal, no orphaned
 attachment files and no temp files.
+
+A second scenario does the same with ``geniza sync`` against the fake
+JMAP server, reaching ``sync.json`` and the evaluation of ``incoming/``.
 """
 
 import os
 import stat
+import traceback
 from collections.abc import Callable
-from dataclasses import replace
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import pytest
 from conftest import corpus_files
+from jmapserver import TOKEN, FakeJmap, fake_jmap
 
-from geniza.config import init_store, mark_initialized
+from geniza.config import Config, init_store, is_initialized, mark_initialized, parse
 from geniza.mime.recipes import Policy
-from geniza.store import segment
+from geniza.store import incoming, segment
 from geniza.store.ingest import Catalog, Ingester
-from geniza.store.journal import Add, Event, Flags, JournalWriter, Mbox, State, replay
+from geniza.store.journal import (
+    Add,
+    Drop,
+    Event,
+    Flags,
+    Gone,
+    JournalWriter,
+    Mbox,
+    Promote,
+    Purge,
+    State,
+    read_events,
+    replay,
+)
 from geniza.store.lock import StoreLock
+from geniza.sync.base import SyncFile, read_sync, sync_store
+from geniza.sync.jmap import Client
 from geniza.verify import verify
 
 T0 = datetime(2026, 10, 23, 14, 2, 11, tzinfo=UTC)
@@ -125,19 +146,26 @@ def crash_at(step: int, variant: str) -> None:
         wrap(name)
 
 
-def run_until_crash(store: Path, step: int, variant: str) -> int:
+def run_child(fn: Callable[[], None], step: int = 0, variant: str = "clean") -> int:
+    """Run ``fn`` in a forked child that crashes at ``step`` (if not 0)."""
     pid = os.fork()
     if pid == 0:
         status = FINISHED
         try:
-            crash_at(step, variant)
-            scenario(store)
+            if step:
+                crash_at(step, variant)
+            fn()
         except BaseException:
+            traceback.print_exc()
             status = 1
         finally:
             os._exit(status)
     _, status = os.waitpid(pid, 0)
     return os.waitstatus_to_exitcode(status)
+
+
+def run_until_crash(store: Path, step: int, variant: str) -> int:
+    return run_child(lambda: scenario(store), step, variant)
 
 
 def journal_state(store: Path) -> State:
@@ -194,3 +222,173 @@ def test_crash_at_every_step(
 def test_child_crashes_at_the_requested_step(tmp_path: Path) -> None:
     assert run_until_crash(tmp_path / "a", 1, "clean") == CRASHED
     assert segment.segments(tmp_path / "a") == []
+
+
+# --- sync -----------------------------------------------------------------
+#
+# The same, with ``geniza sync`` against the fake JMAP server writing the
+# store: stages of changes on the server, each followed by a sync, so the
+# crash can also hit ``sync.json`` (step 4 of the write ordering) and the
+# evaluation of ``incoming/``. Children start their own server: the parent
+# stays single-threaded, as ``fork`` needs. After a crash, the server is
+# made again at the stage the child had reached (a server never goes back
+# in time) and the remaining stages run in another child.
+
+DAY = timedelta(days=1)
+
+
+def stage_0(fake: FakeJmap, ids: dict[str, str]) -> None:
+    inbox = fake.add_mailbox("Inbox", "inbox")
+    archive = fake.add_mailbox("Archive", "archive")
+    trash = fake.add_mailbox("Trash", "trash")
+    ids |= {"inbox": inbox, "archive": archive, "trash": trash}
+    for name, box, received in [
+        ("plain_text_lf", inbox, OLD),
+        ("base64_76_crlf", archive, OLD),
+        ("outlook_related", inbox, LATER),
+        ("apple_inline", inbox, T0 - DAY),
+        ("forwarded_rfc822", inbox, T0 - 2 * DAY),
+    ]:
+        ids[name] = fake.add_email(CORPUS[name], {box}, {"$seen"}, received)
+
+
+def stage_1(fake: FakeJmap, ids: dict[str, str]) -> None:
+    inbox, archive = ids["inbox"], ids["archive"]
+    fake.update_email(ids["plain_text_lf"], mailboxes={archive})
+    fake.update_email(ids["base64_76_crlf"], keywords={"$seen", "$flagged"})
+    fake.destroy_email(ids["forwarded_rfc822"])
+    ids["reply"] = fake.add_email(CORPUS["reply"], {inbox}, received=OLD)
+    for name in ("qp_text_attachments", "smime_signed"):
+        ids[name] = fake.add_email(CORPUS[name], {inbox}, received=T0 + DAY / 2)
+    fake.add_mailbox("Lists", parent=archive)
+
+
+def stage_2(fake: FakeJmap, ids: dict[str, str]) -> None:
+    fake.update_email(ids["smime_signed"], mailboxes={ids["archive"]})
+    fake.update_email(ids["apple_inline"], keywords=set())
+
+
+def stage_3(fake: FakeJmap, ids: dict[str, str]) -> None:
+    fake.destroy_email(ids["reply"])
+    fake.destroy_mailbox(ids["trash"])
+    late = T0 + 44 * DAY
+    fake.add_email(CORPUS["calendar_alternative"], {ids["inbox"]}, received=late)
+
+
+#: Changes on the server, and the time of the sync that follows them. The
+#: first sync ends the initialization; the second holds new mail and finds
+#: a held message gone; the third promotes one, now older than ``max_age``,
+#: and drops the gone one; the fourth purges it, finds a mailbox gone and
+#: holds a new message.
+STAGES = [
+    (stage_0, T0),
+    (stage_1, T0 + DAY),
+    (stage_2, T0 + 9 * DAY),
+    (stage_3, T0 + 45 * DAY),
+]
+
+
+def sync_config(root: Path, fake: FakeJmap) -> Config:
+    data = {
+        "stores": {"s": {"path": str(root / "store"), "cache": str(root / "cache")}},
+        "accounts": {
+            ACCOUNT: {
+                "store": "s",
+                "type": "jmap",
+                "url": fake.url,
+                "token_command": f"printf %s {TOKEN}",
+            }
+        },
+    }
+    return parse(data, root / "config.toml", {})
+
+
+def sync_scenario(root: Path, start: int = 0) -> None:
+    """Run the stages from ``start`` on, against a new server brought to
+    that stage. The stage reached is written to ``root/stage``."""
+    with fake_jmap() as fake:
+        config = sync_config(root, fake)
+        store = config.stores["s"]
+        ids: dict[str, str] = {}
+        for i, (change, now) in enumerate(STAGES):
+            change(fake, ids)
+            if i < start:
+                continue
+            (root / "stage").write_text(str(i))
+            [report] = sync_store(
+                config,
+                store,
+                [config.accounts[ACCOUNT]],
+                connect=lambda url, token: Client.connect(url, token, timeout=10),
+                clock=lambda now=now: now,
+            )
+            assert report.ok, report.text()
+
+
+@dataclass(frozen=True)
+class Outcome:
+    messages: set[str]
+    state: State
+    sync: SyncFile
+    held: set[str]
+
+
+def outcome(root: Path) -> Outcome:
+    store = root / "store"
+    return Outcome(
+        messages=set(Catalog.scan(store).messages),
+        state=journal_state(store),
+        sync=read_sync(store, ACCOUNT),
+        held=set(incoming.held(store, ACCOUNT)),
+    )
+
+
+@pytest.fixture(scope="module")
+def sync_expected(tmp_path_factory: pytest.TempPathFactory) -> Outcome:
+    root = tmp_path_factory.mktemp("sync-crash-free")
+    assert run_child(partial(sync_scenario, root)) == FINISHED
+    store = root / "store"
+    report = verify(store)
+    assert not report.problems
+    assert not report.orphans
+    assert is_initialized(store)
+    kinds = {type(e) for e in read_events(store, ACCOUNT)}
+    assert {Gone, Promote, Drop, Purge} <= kinds
+    result = outcome(root)
+    assert result.sync.jmap and result.held
+    return result
+
+
+@pytest.mark.parametrize("variant", ["clean", "torn", "zeros"])
+def test_sync_crash_at_every_step(
+    tmp_path: Path, variant: str, sync_expected: Outcome
+) -> None:
+    crashes = 0
+    for step in range(1, 10_000):
+        root = tmp_path / str(step)
+        root.mkdir()
+        status = run_child(partial(sync_scenario, root), step, variant)
+        if status == FINISHED:
+            break
+        if status == NOT_APPLICABLE:
+            continue
+        assert status == CRASHED, f"step {step}: child exited with {status}"
+        crashes += 1
+
+        store = root / "store"
+        recover(store)
+        report = verify(store)
+        assert not report.problems, f"step {step}: {report.problems}"
+
+        start = int((root / "stage").read_text())
+        status = run_child(partial(sync_scenario, root, start))
+        assert status == FINISHED, f"step {step}: rerun exited with {status}"
+        report = verify(store)
+        assert not report.problems, f"step {step}: {report.problems}"
+        assert not report.orphans, f"step {step}"
+        assert outcome(root) == sync_expected, f"step {step}"
+        assert is_initialized(store), f"step {step}"
+        assert not temp_files(store), f"step {step}"
+    else:
+        pytest.fail("the scenario never finished")
+    assert crashes > 20

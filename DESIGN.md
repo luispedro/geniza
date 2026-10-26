@@ -112,7 +112,10 @@ for a different or restored store), the files built from a store
 the index is rebuilt; nothing else in the directory is touched. The cache
 directory is created with mode 0700 and tagged with `CACHEDIR.TAG`. A
 non-empty directory without a `CACHEDIR.TAG` is refused rather than
-tagged, so a mistyped cache path cannot make backups skip it.
+tagged, so a mistyped cache path cannot make backups skip it. Temp files
+of `CACHEDIR.TAG` and `store-id` (left by a crash while the cache was
+created, or by another process creating it) do not count; nothing locks
+the cache, so they are left in place rather than removed.
 
 ## Configuration
 
@@ -818,7 +821,10 @@ threads).
   mailbox (that would make the result depend on event order); readers
   ignore flags of a message that is not there, and a sync writes a `flags`
   event with every `add`. The same holds for `props` of a remote id that
-  is gone.
+  is gone. An empty `flags` set is the same as none, as for `props`: a
+  crash that keeps an `add` but loses the `flags` after it leaves the
+  same state when the message has no flags, and a different one (which
+  the next sync corrects) when it has.
 - An `eid` keeps pointing to its message after the message is removed.
 - `seq` starts at 1 and increases by one per event across all files of
   the account. Events are written in batches; a batch shares one `ts` and

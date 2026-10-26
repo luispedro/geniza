@@ -28,9 +28,9 @@ design leaves open.
   (`sync/jmap.py`) and `geniza sync` (`sync/base.py`, `sync/jmap_sync.py`:
   mailboxes and emails into the journal, downloads, `sync.json`,
   evaluation, the end of initialization), tested against an in-process
-  fake server (`tests/jmapserver.py`). Left: settings (`setting`
-  events), extension properties (`props`), `sync.json` in the fault
-  injection, and the run against a real Fastmail account (see M8).
+  fake server (`tests/jmapserver.py`), including fault injection of whole
+  syncs. Left: settings (`setting` events), extension properties
+  (`props`), and the run against a real Fastmail account (see M8).
 
 ## Tooling
 
@@ -239,8 +239,8 @@ also with the unsynced end torn or zero-filled). After a writer opens the
 store, `verify` passes; running the scenario again gives what a crash-free
 run gives, with no orphans or temp files left. It found that temp files
 of `store.toml` and `initialized` could be left behind once `store.toml`
-existed; `init_store` now always removes them. M8 adds `sync.json` (step
-4) to the scenario.
+existed; `init_store` now always removes them. M8 adds a sync scenario
+that reaches `sync.json` (step 4); see M8.
 
 ### M6 — Index and search
 
@@ -453,6 +453,23 @@ initialization ends. Tests cover each case against the fake server
 runs random server changes, forgotten changes and lost `sync.json`
 files, checking after every sync that the journal equals the server,
 that no body is downloaded twice, and that `verify` passes.
+
+Progress: fault injection of sync. `tests/test_faults.py` gains a second
+scenario: four stages of changes on the fake server (the first sync and
+the end of initialization, held mail, a held message gone from the
+server, a promotion, a drop and a purge, a destroyed mailbox), each
+followed by `geniza sync`, so a crash can hit every step from the store's
+creation to `sync.json`. The children start their own server; after a
+crash, the server is made again at the stage reached and the remaining
+syncs run. The store must pass `verify` and end like a crash-free run:
+the same messages, replayed journal, `sync.json` and `incoming/`. It
+found that a crash while the cache was first created (its
+`CACHEDIR.TAG` temp file left, before the rename) made every later run
+refuse the cache directory as not a geniza cache; such temp files no
+longer count. It also found that a torn journal tail could keep an `add`
+and lose the empty `flags` event after it, leaving a replayed state that
+differed from a crash-free run's only in that empty set; replay now
+treats an empty set as none, as it already did for `props`.
 
 ### M9 — IMAP sync (after the first release)
 

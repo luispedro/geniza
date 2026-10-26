@@ -67,6 +67,8 @@ _DURATION_UNITS = {
 }
 #: Temp files of ``_write_new`` in a store's root.
 _TEMP_NAME = re.compile(r"\.(?:store\.toml|initialized)\.[0-9a-f]{16}\.tmp")
+#: Temp files of ``_write_new`` in a cache.
+_CACHE_TEMP_NAME = re.compile(r"\.(?:CACHEDIR\.TAG|store-id)\.[0-9a-f]{16}\.tmp")
 
 
 class ConfigError(Exception):
@@ -654,10 +656,17 @@ def open_cache(path: Path, store_id: uuid.UUID) -> bool:
 
     A non-empty directory without a ``CACHEDIR.TAG`` is refused rather
     than tagged, so a mistyped cache path cannot make backups skip it.
+    Temp files of the tag and the id do not count: a crash (or another
+    process creating the cache) can leave them. They are not removed,
+    since nothing locks the cache.
     """
     path = Path(path)
     tag = path / CACHEDIR_TAG
-    if path.exists() and not tag.exists() and any(path.iterdir()):
+    if (
+        path.exists()
+        and not tag.exists()
+        and any(not _CACHE_TEMP_NAME.fullmatch(p.name) for p in path.iterdir())
+    ):
         raise ConfigError(
             f"{path}: not a geniza cache (no {CACHEDIR_TAG}) and not empty"
         )

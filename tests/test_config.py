@@ -406,6 +406,19 @@ def test_cache_refuses_untagged_directory(tmp_path: Path) -> None:
     assert not (tmp_path / CACHEDIR_TAG).exists()
 
 
+def test_cache_with_only_a_tag_temp_file(tmp_path: Path) -> None:
+    """A crash while the tag was written, before its rename."""
+    temp = tmp_path / f".{CACHEDIR_TAG}.0123456789abcdef.tmp"
+    temp.write_text("Signature: 8a4")
+    assert open_cache(tmp_path, uuid.uuid4())
+    assert (tmp_path / CACHEDIR_TAG).exists()
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / f".{CACHEDIR_TAG}.tmp").write_text("not ours")
+    with pytest.raises(ConfigError, match="not a geniza cache"):
+        open_cache(other, uuid.uuid4())
+
+
 def test_cache_refuses_bad_tag(tmp_path: Path) -> None:
     (tmp_path / CACHEDIR_TAG).write_text("hello\n")
     with pytest.raises(ConfigError, match="not a cache directory tag"):

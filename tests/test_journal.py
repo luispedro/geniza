@@ -350,6 +350,16 @@ def test_readding_keeps_flags() -> None:
     assert state.flags_of(a, "Archive") is None
 
 
+def test_empty_flags_are_no_flags() -> None:
+    a = "sha256:aa"
+    add = Add(msg=a, mbox="INBOX", rid="1")
+    none = Flags(msg=a, mbox="INBOX", set=frozenset())
+    some = Flags(msg=a, mbox="INBOX", set=frozenset({"x"}))
+    assert state_of(stamp([add, none])).flags == {}
+    assert state_of(stamp([add, some, none])).flags == {}
+    assert state_of(stamp([add, none])).flags_of(a, "INBOX") == frozenset()
+
+
 def test_monthly_files_and_seq(tmp_path: Path) -> None:
     clock = Clock(datetime(2026, 9, 30, 23, 59, 59, tzinfo=UTC))
     w = JournalWriter(tmp_path, "acct", clock=clock)

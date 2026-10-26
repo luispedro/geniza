@@ -347,7 +347,8 @@ class State:
     places: dict[str, dict[str, set[str]]] = field(default_factory=dict)
     #: (mbox, rid) → what the ``add`` said, for every entry of ``contents``.
     placed: dict[tuple[str, str], Placed] = field(default_factory=dict)
-    #: (msg, mbox) → the last flag set journaled, kept when the message
+    #: (msg, mbox) → the last flag set journaled, if not empty (so a lost
+    #: ``flags`` event with no flags changes nothing); kept when the message
     #: leaves the mailbox (clearing it would depend on the order of events);
     #: use ``flags_of``.
     flags: dict[tuple[str, str], frozenset[str]] = field(default_factory=dict)
@@ -378,7 +379,10 @@ class State:
                 if eid is not None:
                     self.eids[eid] = msg
             case Flags(msg=msg, mbox=mbox, set=flags):
-                self.flags[msg, mbox] = flags
+                if flags:
+                    self.flags[msg, mbox] = flags
+                else:
+                    self.flags.pop((msg, mbox), None)
             case Props(mbox=mbox, rid=rid, props=props):
                 if props:
                     self.props[mbox, rid] = props
