@@ -282,7 +282,8 @@ class Applied:
     dropped: int = 0
     undropped: int = 0
     purged: int = 0
-    #: Held files that do not hash to their name, left alone.
+    #: Held files left alone: those that do not hash to their name, and
+    #: those of messages whose segment record does not rebuild.
     problems: list[str] = field(default_factory=list)
 
 
@@ -298,13 +299,41 @@ def apply(
     A crash in between leaves files that the next evaluation finds in a
     segment (promoted without writing) or with their fate journaled
     (unlinked).
+
+    A file is unlinked as a duplicate of a segment record only once that
+    record has been read in full and its message rebuilt: if it does not
+    rebuild, the file may be the only good copy, so it is kept (with no
+    ``promote``) and reported.
     """
+    from geniza.store import reader
+    from geniza.store.attachments import AttachmentError
     from geniza.store.ingest import message_id
+    from geniza.store.segment import SegmentError
 
     store, account = ingester.store, journal.account
     report = Applied()
+
+    def intact(msg: str, segment: str, offset: int) -> bool:
+        try:
+            data = reader.message(store, segment, offset)
+            error = None if message_id(data) == msg else "another message"
+        except (SegmentError, reader.RebuildError, AttachmentError) as e:
+            error = str(e)
+        except OSError as e:
+            error = f"{e.filename}: {e.strerror}"
+        if error is not None:
+            report.problems.append(
+                f"{file_path(store, account, msg)}: kept, its record"
+                f" ({segment} at {offset}) does not rebuild: {error}"
+            )
+        return error is None
+
     events: list[Event] = [Undrop(msg=m) for m in evaluation.undrop]
-    gone: list[str] = list(evaluation.unlink)
+    gone: list[str] = [
+        m
+        for m in evaluation.unlink
+        if (where := ingester.catalog.messages.get(m)) is None or intact(m, *where)
+    ]
     for msg in evaluation.promote:
         path = file_path(store, account, msg)
         data = path.read_bytes()
@@ -312,11 +341,15 @@ def apply(
             report.problems.append(f"{path}: does not hash to its name")
             continue
         added = ingester.add(data, received_of(path.stat()))
+        if not added.new and not intact(msg, added.segment, added.offset):
+            continue
         events.append(Promote(msg=msg, segment=added.segment, offset=added.offset))
         gone.append(msg)
         report.promoted += 1
         report.archived += not added.new
     for msg, (segment, offset) in evaluation.archived.items():
+        if not intact(msg, segment, offset):
+            continue
         events.append(Promote(msg=msg, segment=segment, offset=offset))
         gone.append(msg)
         report.promoted += 1

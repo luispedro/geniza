@@ -628,7 +628,10 @@ mailbox* is any of its synced mailboxes that is not in
   promoted without writing anything: journal `promote` with the location
   of the existing record → unlink the `.eml`. This applies before the rules
   below and to dropped messages too: once the bytes are in a segment, the
-  `.eml` is only a duplicate.
+  `.eml` is only a duplicate. It is unlinked as one only after the record
+  has been read in full and its message rebuilt and hashed; a record that
+  fails this (damage that a crash cannot cause) leaves the `.eml` in
+  place, with no `promote`, and is reported: it may be the only good copy.
 - **Promote** if it is in a filed mailbox (the user filed it), or it is older
   than `max_age` and still in any synced mailbox (including Trash/Junk).
   Promotion = extract attachments → append segment record → `fsync` →
@@ -648,9 +651,9 @@ evaluation holds its `undrop`, `promote`, `drop` and `purge` events, in
 that order; the promoted and purged files are unlinked after it. A crash
 before the unlink leaves files whose fate is already journaled: the next
 evaluation unlinks them without writing events (a promoted one is in a
-segment; a purged one is unlinked unless it is back in a synced
-mailbox, see below). A held file that does not hash to its name is
-reported and left alone.
+segment, and is checked as above first; a purged one is unlinked unless
+it is back in a synced mailbox, see below). A held file that does not
+hash to its name is reported and left alone.
 
 The two-run requirement covers the IMAP race where a message is moved from
 INBOX to a folder that was already synced earlier in the same run: it looks

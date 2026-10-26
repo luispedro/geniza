@@ -576,6 +576,73 @@ def test_purge_interrupted_before_the_unlink(acct: Account) -> None:
     )
 
 
+def damage_record(acct: Account, m: str) -> None:
+    """Flip a byte in the body of ``m``'s record, after which a partial run
+    stores message 2 (a damaged last record would be truncated as torn)."""
+    acct.server.deliver(2, T0, "W")
+    acct.run(T0 + DAY, complete=False)
+    seg, offset = acct_location(acct, m)
+    path = acct.store / seg
+    offsets = [o for o, _ in segment.scan(path)]
+    end = offsets[offsets.index(offset) + 1]
+    os.chmod(path, 0o644)
+    data = bytearray(path.read_bytes())
+    data[end - 3] ^= 0xFF
+    path.write_bytes(data)
+
+
+def test_archived_file_is_kept_if_its_record_does_not_rebuild(
+    acct: Account,
+) -> None:
+    acct.server.deliver(1, T0)
+    acct.run(T0)
+    acct.server.move(1, "W")
+    acct.crash = lambda events: any(isinstance(e, Promote) for e in events)
+    with pytest.raises(OSError, match="crash"):
+        acct.run(T0 + DAY)
+    acct.crash = None
+    damage_record(acct, msg(1))
+    with (
+        StoreLock(acct.store) as lock,
+        Ingester(acct.store, lock, clock=lambda: T0) as ing,
+    ):
+        writer = JournalWriter(acct.store, acct.name, clock=lambda: T0)
+        ev = evaluate(
+            acct.state(),
+            incoming.held(acct.store, acct.name),
+            ing.catalog.messages,
+            SETTINGS,
+            now=T0 + 2 * DAY,
+        )
+        assert set(ev.archived) == {msg(1)}
+        applied = incoming.apply(ing, writer, ev)
+        # The same through a promotion that finds the message stored.
+        again = incoming.apply(ing, writer, Evaluation(promote=(msg(1),)))
+    for report in (applied, again):
+        [problem] = report.problems
+        assert "kept, its record" in problem and report.promoted == 0
+    assert acct.held() == {msg(1)} and acct.fate(msg(1)) is None
+
+
+def test_promoted_file_is_kept_if_its_record_does_not_rebuild(
+    acct: Account,
+) -> None:
+    acct.server.deliver(1, T0)
+    acct.run(T0)
+    acct.server.move(1, "W")
+    real = Path.unlink
+    Path.unlink = lambda self, missing_ok=False: None  # type: ignore[method-assign,assignment]
+    try:
+        acct.run(T0 + DAY)
+    finally:
+        Path.unlink = real  # type: ignore[method-assign]
+    assert acct.fate(msg(1)) == "promoted" and acct.held() == {msg(1)}
+    damage_record(acct, msg(1))
+    ev = acct.run(T0 + 2 * DAY)
+    assert ev is not None and ev.unlink == (msg(1),)
+    assert acct.held() == {msg(1)}
+
+
 def test_partial_run_writes_no_fates(acct: Account) -> None:
     for i in range(1, 4):
         acct.server.deliver(i, T0)
