@@ -75,6 +75,11 @@ def files(store: Path, account: str) -> dict[str, Path]:
     }
 
 
+def is_temp(name: str) -> bool:
+    """Whether ``name`` is that of a temp file of ``write``."""
+    return _TEMP_NAME.fullmatch(name) is not None
+
+
 def received_of(st: os.stat_result) -> datetime:
     """When a held message was received: its file's modification time."""
     return datetime.fromtimestamp(int(st.st_mtime), UTC)
@@ -102,7 +107,7 @@ def open_dir(store: Path, account: str) -> Path:
         _fsync_dir(directory.parent)
         _fsync_dir(directory.parent.parent)
     for p in sorted(directory.iterdir()):
-        if _TEMP_NAME.fullmatch(p.name):
+        if is_temp(p.name):
             log.warning("%s: removing a temp file left by a crash", p)
             p.unlink()
     return directory

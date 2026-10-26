@@ -1261,6 +1261,14 @@ record does not stop the others from being checked, though damage to a
 record's header hides the records after it in that segment. Attachment
 files that no record names (orphans of a crash before their message was
 committed) are listed but are not problems.
+It also hashes every file in `incoming/` against its name; files of
+messages that are also in a segment (left by a crash, or another
+account's promotion, until the next evaluation) and temp files are
+listed but are not problems, while anything else there is one. Each
+account's journal is replayed and checked against the store: every
+message in one of its mailboxes must be in a segment or in its
+`incoming/` (unless purged: evaluation ignores excluded mailboxes), and
+every `promote` must name a record of its message.
 
 `debug import-local PATH` (development only) ingests a Maildir tree or an
 mbox into a store to exercise ingest on real volume before any network

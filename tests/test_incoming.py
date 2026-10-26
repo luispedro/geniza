@@ -35,6 +35,7 @@ from geniza.store.journal import (
     Undrop,
 )
 from geniza.store.lock import StoreLock
+from geniza.verify import verify
 
 T0 = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
 DAY = timedelta(days=1)
@@ -627,6 +628,97 @@ def test_evaluate_grace_runs_from_the_drop() -> None:
     assert ev.purge == (msg(1),)
 
 
+# --- verify ------------------------------------------------------------
+
+
+def test_verify_checks_held_files(acct: Account) -> None:
+    for i in range(1, 4):
+        acct.server.deliver(i, T0)
+    acct.run(T0)
+    report = verify(acct.store)
+    assert report.problems == [] and report.held == 3
+    assert report.held_bytes == sum(len(message(i)) for i in range(1, 4))
+    directory = incoming.incoming_dir(acct.store, acct.name)
+    damaged = incoming.file_path(acct.store, acct.name, msg(1))
+    os.chmod(damaged, 0o644)
+    damaged.write_bytes(b"damaged")
+    temp = directory / f".{msg(2).removeprefix('sha256:')}.{'0' * 16}.tmp"
+    temp.write_bytes(b"partial")
+    (directory / "notes.txt").write_bytes(b"stray")
+    report = verify(acct.store)
+    rel = damaged.relative_to(acct.store).as_posix()
+    assert report.temp_files == [temp.relative_to(acct.store).as_posix()]
+    # The damaged file no longer holds message 1, which the journal names.
+    assert sorted(report.problems) == sorted(
+        [
+            f"{rel}: does not hash to its name",
+            "incoming/acct/notes.txt: not a held message",
+            f"journal of acct: {msg(1)} is in a mailbox but not stored",
+        ]
+    )
+
+
+def test_verify_lists_held_files_also_in_a_segment(acct: Account) -> None:
+    acct.server.deliver(1, T0)
+    acct.run(T0)
+    acct.server.move(1, "W")
+    acct.crash = lambda events: any(isinstance(e, Promote) for e in events)
+    with pytest.raises(OSError, match="crash"):
+        acct.run(T0 + DAY)
+    report = verify(acct.store)
+    path = incoming.file_path(acct.store, acct.name, msg(1))
+    assert report.problems == []
+    assert report.held_in_segment == [path.relative_to(acct.store).as_posix()]
+
+
+def test_verify_checks_promotions(acct: Account) -> None:
+    for i in (1, 2):
+        acct.server.deliver(i, T0, "W")
+    acct.run(T0)
+    seg, offset = acct_location(acct, msg(2))
+    with StoreLock(acct.store):
+        JournalWriter(acct.store, acct.name).append(
+            [Promote(msg=msg(1), segment=seg, offset=offset)]
+        )
+    assert verify(acct.store).problems == [
+        f"journal of acct: {msg(1)} promoted to {seg} at {offset},"
+        " which is not a record of it"
+    ]
+
+
+def test_verify_accepts_purged_messages(acct: Account) -> None:
+    for i in range(1, 4):
+        acct.server.deliver(i, T0)
+    acct.run(T0)
+    acct.server.expunge(1)
+    for days in (1, 2, 40):
+        acct.run(T0 + days * DAY)
+    assert acct.fate(msg(1)) == "purged"
+    report = verify(acct.store)
+    assert report.problems == [] and (report.records, report.held) == (2, 0)
+
+
+def test_verify_accepts_purged_messages_in_an_excluded_mailbox(
+    tmp_path: Path,
+) -> None:
+    """Evaluation ignores excluded mailboxes, so a message the journal still
+    has in one can be purged."""
+    store = tmp_path / "store"
+    events: list[Event] = [
+        Mbox(mbox="X", name="Lists"),
+        Add(msg=msg(1), mbox="X", rid="e1"),
+        Drop(msg=msg(1)),
+    ]
+    with StoreLock(store):
+        JournalWriter(store, "acct").append(events)
+    assert verify(store).problems == [
+        f"journal of acct: {msg(1)} is in a mailbox but not stored"
+    ]
+    with StoreLock(store):
+        JournalWriter(store, "acct").append([Purge(msg=msg(1))])
+    assert verify(store).problems == []
+
+
 # --- property test -------------------------------------------------------
 
 N = 4
@@ -698,6 +790,7 @@ def test_no_mail_is_lost(
                 if boxes - {"I", "T", "J"}
             }
             acct.run(now)
+            assert verify(acct.store).problems == []
             state = acct.state()
             stored = set(records(acct.store))
             held = acct.held()

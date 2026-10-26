@@ -20,8 +20,9 @@ design leaves open.
   pass and `search` work, and the "done when" holds: an updated index
   searches like a rebuilt one (see M6). Attachment text is left for later.
 - **M7 in progress.** Placement, evaluation and its application work and
-  are tested against a fake source (see M7). Next: `verify` checks
-  `incoming/`, and `show` of a message only in `incoming/`.
+  are tested against a fake source, and `verify` checks `incoming/` and
+  the journals against the store (see M7). Next: `show` of a message
+  only in `incoming/`.
 
 ## Tooling
 
@@ -344,7 +345,12 @@ message restored after its purge, excluded mailboxes and a damaged held
 file; a property test runs random server changes and runs and checks that
 nothing downloaded is lost, that drops follow two absent runs (never with
 `keep`), that purges wait for the grace period, and that filed or old
-messages are not left in `incoming/`.
+messages are not left in `incoming/`. `verify` hashes the held files,
+lists temp files and held files of messages also in a segment, and
+replays each journal: messages in its mailboxes must be stored (in a
+segment or the account's `incoming/`, unless purged) and promotions must
+name a record of their message; the property test runs it after every
+evaluation.
 
 ### M8 — JMAP sync
 
