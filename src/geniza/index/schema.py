@@ -14,7 +14,7 @@ from pathlib import Path
 from geniza.config import ConfigError
 
 INDEX_FILE = "index.sqlite"
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 1
 
 #: Run one statement at a time, split at ";": comments must not hold one.
 SCHEMA = """
