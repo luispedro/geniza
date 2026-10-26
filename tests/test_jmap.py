@@ -8,6 +8,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from jmapserver import ACCOUNT, CORE, TOKEN, FakeJmap, fake_jmap
 
+from geniza.sync import jmap
 from geniza.sync.jmap import (
     CannotCalculateChanges,
     Client,
@@ -273,6 +274,72 @@ def test_download_missing(server: FakeJmap) -> None:
     c = connect(server)
     with pytest.raises(JmapError, match="HTTP 404"):
         c.download("Gnothing")
+
+
+# --- retries -----------------------------------------------------------------
+
+
+def connect_sleeping(fake: FakeJmap) -> tuple[Client, list[float]]:
+    sleeps: list[float] = []
+    return Client.connect(fake.url, TOKEN, timeout=10, sleep=sleeps.append), sleeps
+
+
+def test_retry_transient(server: FakeJmap) -> None:
+    box = server.add_mailbox("Inbox")
+    c, sleeps = connect_sleeping(server)
+    server.busy = [(429, "2"), (503, None), (502, None), (504, " 0 ")]
+    assert [m["id"] for m in c.get("Mailbox").objects] == [box]
+    # Retry-After when given, else a backoff that doubles on each use.
+    assert sleeps == [2.0, 1.0, 2.0, 0.0]
+    assert server.methods == ["Mailbox/get"]
+
+
+def test_retry_session_and_download(server: FakeJmap) -> None:
+    box = server.add_mailbox("Inbox")
+    id_ = server.add_email(message(1), {box})
+    server.busy = [(503, None)]
+    c, sleeps = connect_sleeping(server)
+    blob_id = server.emails[id_].blob_id
+    server.busy = [(429, None), (429, None)]
+    assert c.download(blob_id) == message(1)
+    assert sleeps == [1.0, 1.0, 2.0]
+
+
+def test_retry_gives_up(server: FakeJmap) -> None:
+    c, sleeps = connect_sleeping(server)
+    server.busy = [(503, None)] * (jmap.RETRIES + 1)
+    with pytest.raises(JmapError, match="HTTP 503"):
+        c.get("Mailbox")
+    assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0]
+    assert server.busy == []
+    assert server.methods == []
+
+
+def test_retry_after_too_long(server: FakeJmap) -> None:
+    c, sleeps = connect_sleeping(server)
+    server.busy = [(429, "3600")]
+    with pytest.raises(JmapError, match="retry after 3600 s"):
+        c.get("Mailbox")
+    assert sleeps == []
+
+
+@pytest.mark.parametrize("code", [400, 404, 500])
+def test_no_retry(server: FakeJmap, code: int) -> None:
+    c, sleeps = connect_sleeping(server)
+    server.busy = [(code, "1")]
+    with pytest.raises(JmapError, match=f"HTTP {code}"):
+        c.get("Mailbox")
+    assert sleeps == []
+
+
+def test_retry_after_values() -> None:
+    soon = datetime.now(UTC) + timedelta(seconds=30)
+    wait = jmap._retry_after(soon.strftime("%a, %d %b %Y %H:%M:%S GMT"))
+    assert wait is not None and 25 <= wait <= 30
+    assert jmap._retry_after("Mon, 01 Jan 2001 00:00:00 GMT") == 0.0
+    assert jmap._retry_after("120") == 120.0
+    for bad in [None, "", "soon", "-5", "1.5", "Mon, 01 Jan 2001 00:00:00"]:
+        assert jmap._retry_after(bad) is None
 
 
 # --- changes, as a property ----------------------------------------------------

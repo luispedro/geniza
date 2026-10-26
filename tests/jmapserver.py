@@ -126,6 +126,9 @@ class FakeJmap:
         self.fail: set[str] = set()
         #: Method names answered with a ``forbidden`` error.
         self.forbidden: set[str] = set()
+        #: Answers to the next requests, whatever they ask, each taken off
+        #: the front: an HTTP status and a ``Retry-After`` value (or None).
+        self.busy: list[tuple[int, str | None]] = []
         self.url = ""
 
     def _id(self, prefix: str) -> str:
@@ -403,11 +406,22 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
     def _authorized(self) -> bool:
-        self.server.fake.requests += 1
-        if self.headers.get("Authorization") == f"Bearer {TOKEN}":
-            return True
-        self._send(401, b'{"type": "about:blank", "status": 401}')
-        return False
+        """Whether to answer the request: authorized, and not turned away
+        by ``busy``."""
+        fake = self.server.fake
+        with fake.lock:
+            fake.requests += 1
+            busy = fake.busy.pop(0) if fake.busy else None
+        if self.headers.get("Authorization") != f"Bearer {TOKEN}":
+            self._send(401, b'{"type": "about:blank", "status": 401}')
+            return False
+        if busy is not None:
+            code, retry_after = busy
+            headers = {} if retry_after is None else {"Retry-After": retry_after}
+            body = json.dumps({"type": "about:blank", "status": code}).encode()
+            self._send(code, body, headers=headers)
+            return False
+        return True
 
     def _send(self, code: int, body: bytes, type_: str = "application/json",
               headers: dict[str, str] | None = None) -> None:  # fmt: skip

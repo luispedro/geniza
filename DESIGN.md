@@ -1003,6 +1003,15 @@ never goes anywhere the configuration or the session did not name. The
 client sends only methods ending in `/get`, `/changes`, `/query` or
 `/queryChanges`; anything else is refused before a request is made.
 
+A request answered with HTTP 429, 502, 503 or 504 (rate limiting, or a
+server or proxy briefly unavailable) is sent again, up to 5 times: after
+the `Retry-After` the server gives (seconds or a date), else after 1 s,
+doubling with each pause that had no `Retry-After`. A `Retry-After` of
+more than 5 minutes is an error (it stops the run, as any error does)
+rather than a pause. Since every request only reads, sending one again
+is harmless. Other HTTP errors, and network errors, are not retried:
+the run stops, and the next run starts from the same cursors.
+
 The full listing (first sync, `cannotCalculateChanges`) takes the
 `Email` state first (`Email/get` with no ids), then pages through
 `Email/query` sorted by `receivedAt`, each page anchored at the last id

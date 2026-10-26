@@ -30,8 +30,9 @@ design leaves open.
   evaluation, the end of initialization), tested against an in-process
   fake server (`tests/jmapserver.py`), including fault injection of whole
   syncs, and settings (`setting` events for identities, Sieve scripts
-  and the vacation response). Left: extension properties (`props`), and
-  the run against a real Fastmail account (see M8).
+  and the vacation response), and retries on rate limiting. Left:
+  extension properties (`props`), and the run against a real Fastmail
+  account (see M8).
 
 ## Tooling
 
@@ -483,6 +484,13 @@ method's capability in `using` and on the account, and the tests cover
 changes, a missing capability (journaled settings stay), the failures,
 random settings changes in the property test, and settings in the fault
 scenario.
+
+Progress: retries, for the real run. The client sends a request again
+after HTTP 429, 502, 503 or 504, up to five times, waiting as
+`Retry-After` asks (seconds or a date) or with a doubling backoff, and
+gives up at once if asked to wait more than five minutes. The fake
+server's `busy` knob turns requests away; tests cover the API, the
+session and downloads, giving up, and statuses that are not retried.
 
 ### M9 — IMAP sync (after the first release)
 

@@ -13,15 +13,23 @@ loopback host), and redirects are refused rather than followed, so it
 never goes anywhere the session did not name. It is never put in an
 exception or a log line.
 
+A request answered with HTTP 429, 502, 503 or 504 is sent again after a
+pause (``Retry-After`` when the server gives one, else a doubling
+backoff), up to ``RETRIES`` times. Every request only reads, so sending
+one twice is harmless.
+
 JMAP objects are returned as the server sent them (``dict``s of JSON
 values), since the journal keeps unknown properties verbatim.
 """
 
 import json
+import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, Self
 from urllib.parse import quote
 
@@ -52,6 +60,20 @@ CHUNK = 1 << 20
 
 #: Longest server text quoted in an error.
 MAX_DETAIL = 200
+
+#: HTTP statuses that mean "try again later": rate limiting, and a proxy
+#: or server that is briefly unavailable.
+TRANSIENT = frozenset({429, 502, 503, 504})
+
+#: Times a request is sent again after a transient status.
+RETRIES = 5
+
+#: First pause without ``Retry-After``, in seconds; it doubles each time.
+BACKOFF = 1.0
+
+#: Longest pause, in seconds. A ``Retry-After`` asking for more is an
+#: error rather than a pause.
+MAX_WAIT = 300.0
 
 type Json = dict[str, Any]
 
@@ -165,20 +187,35 @@ class Client:
 
     session: Session
 
-    def __init__(self, token: str, *, timeout: float) -> None:
+    def __init__(
+        self,
+        token: str,
+        *,
+        timeout: float,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self._token = token
         self._timeout = timeout
+        self._sleep = sleep
         self._opener = urllib.request.build_opener(_NoRedirect)
 
     def __repr__(self) -> str:
         return f"Client(account={self.session.account_id!r})"
 
     @classmethod
-    def connect(cls, url: str, token: str, *, timeout: float = 60.0) -> Self:
-        """Fetch the session at ``url`` (the configured session URL)."""
+    def connect(
+        cls,
+        url: str,
+        token: str,
+        *,
+        timeout: float = 60.0,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> Self:
+        """Fetch the session at ``url`` (the configured session URL).
+        ``sleep`` makes the pauses between retries."""
         if not secure_url(url):
             raise JmapError(f"insecure URL {url!r}")
-        client = cls(token, timeout=timeout)
+        client = cls(token, timeout=timeout, sleep=sleep)
         client.session = Session.parse(client._json(client._open(url)))
         return client
 
@@ -190,13 +227,27 @@ class Client:
         request.add_header("Accept", "application/json")
         if body is not None:
             request.add_header("Content-Type", "application/json")
-        try:
-            return self._opener.open(request, timeout=self._timeout)
-        except urllib.error.HTTPError as e:
-            raise self._http_error(url, e) from None
-        except (urllib.error.URLError, OSError) as e:
-            reason = getattr(e, "reason", e)
-            raise JmapError(f"{url}: {reason}") from None
+        backoff = BACKOFF
+        for attempt in range(RETRIES + 1):
+            try:
+                return self._opener.open(request, timeout=self._timeout)
+            except urllib.error.HTTPError as e:
+                if e.code not in TRANSIENT or attempt == RETRIES:
+                    raise self._http_error(url, e) from None
+                wait = _retry_after(e.headers.get("Retry-After"))
+                e.close()
+                if wait is None:
+                    wait, backoff = backoff, backoff * 2
+                elif wait > MAX_WAIT:
+                    raise JmapError(
+                        f"{url}: HTTP {e.code}, retry after {wait:.0f} s;"
+                        " not waiting that long"
+                    ) from None
+                self._sleep(wait)
+            except (urllib.error.URLError, OSError) as e:
+                reason = getattr(e, "reason", e)
+                raise JmapError(f"{url}: {reason}") from None
+        raise AssertionError("unreachable")
 
     @staticmethod
     def _http_error(url: str, e: urllib.error.HTTPError) -> JmapError:
@@ -403,6 +454,23 @@ class Client:
             except OSError as e:
                 raise JmapError(f"download of {blob_id}: {e}") from None
         return b"".join(chunks)
+
+
+def _retry_after(value: str | None) -> float | None:
+    """Seconds to wait from a ``Retry-After`` header (delay-seconds or an
+    HTTP date, RFC 9110, 10.2.3); None when absent or unreadable."""
+    if value is None:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return float(value)
+    try:
+        when = parsedate_to_datetime(value)
+    except TypeError, ValueError:
+        return None
+    if when.tzinfo is None:
+        return None
+    return max(0.0, (when - datetime.now(UTC)).total_seconds())
 
 
 def _list[T](
