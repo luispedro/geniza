@@ -49,6 +49,12 @@ def _not_implemented(args: argparse.Namespace, out: Output) -> int:
     return 2
 
 
+def _cmd_sync(args: argparse.Namespace, out: Output) -> int:
+    from geniza.sync import base
+
+    return base.run(args, out)
+
+
 def _cmd_stats(args: argparse.Namespace, out: Output) -> int:
     from geniza import stats
 
@@ -164,9 +170,18 @@ def build_parser() -> argparse.ArgumentParser:
         p.set_defaults(handler=handler, command_name=name)
         return p
 
-    p = add("sync", "sync accounts, then evaluate incoming/")
-    p.add_argument("accounts", nargs="*", metavar="ACCOUNT")
-    p.add_argument("--allow-mass-drop", action="store_true")
+    p = add("sync", "sync accounts, then evaluate incoming/", _cmd_sync)
+    p.add_argument(
+        "accounts",
+        nargs="*",
+        metavar="ACCOUNT",
+        help="accounts to sync (default: all, or all of --store)",
+    )
+    p.add_argument(
+        "--allow-mass-drop",
+        action="store_true",
+        help="drop messages from incoming/ even past the mass-drop guard",
+    )
 
     p = add("search", "search messages, newest first", _cmd_search)
     p.add_argument(

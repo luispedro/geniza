@@ -801,7 +801,8 @@ threads).
   event is written when an object is new or differs from the journaled
   one (see [JMAP](#jmap)).
 - `flags` always carries the **full** flag/keyword set, never a diff, so
-  replay is idempotent.
+  replay is idempotent. Flags are as the server names them: IMAP flags
+  (`\\Seen`), JMAP keywords verbatim (`$seen`).
 - Every event assigns a value without looking at what was there before:
   `mbox` sets a mailbox; `add`/`remove` set or clear the message at
   (`mbox`, `rid`); `flags` sets the flags of (`msg`, `mbox`); `props` the
@@ -836,19 +837,23 @@ threads).
 - The journal doubles as history: when a message was filed, read, deleted.
 
 `sync.json` holds only cursors (and, for [the evaluation](#evaluation),
-the held messages absent at the last one) and is rewritten atomically
-(temp + rename):
+the held messages absent at the last one; and the `exclude` list the
+cursors were taken with, see [Sync](#sync)) and is rewritten atomically
+(temp + fsync + rename) after each complete run, never after a failed or
+partial one:
 
 ```json
 {
   "identity": "objectid",       // "jmap" | "objectid" | "gmail" | "headers"
   "imap": {"INBOX": {"uidvalidity": 99, "uidnext": 1235, "highestmodseq": 77812}},
   "jmap": {"email_state": "…", "mailbox_state": "…"},
+  "exclude": ["junk"],          // sync.exclude when the cursors were taken
   "absent": ["sha256:…"]        // held messages in no synced mailbox at the last evaluation
 }
 ```
 
-If it is lost, the next sync is a full resync; bodies are not re-downloaded
+If it is lost (or damaged: it is then ignored with a warning), the next
+sync is a full resync; bodies are not re-downloaded
 because of [message matching](#message-matching).
 
 ## Write ordering and crash safety
@@ -890,12 +895,32 @@ is left alone.
 
 Every mailbox of every account is synced unless excluded. The first sync
 that completes for every account of a store ends the store's
-initialization (see [the layout](#on-disk-layout)).
+initialization (see [the layout](#on-disk-layout)): once every account
+of the store has a `sync.json` with cursors, written by a complete run.
 
 ```toml
 [accounts.work.sync]
 exclude = []              # mailbox names (IMAP) or roles, e.g. ["junk"]
 ```
+
+An excluded mailbox is still journaled (`mbox`, so the folder tree is
+complete), but nothing is added to it and no message is downloaded for
+it; a message that leaves it is still journaled as removed (that is a
+fact about the server, not a sync of the mailbox). Changes since a cursor
+do not cover a mailbox that stopped being excluded, so `sync.json`
+records the `exclude` list its cursors were taken with, and a different
+one makes the next run list everything (downloading only what the
+journal does not map).
+
+A run is **complete** when every changed message was journaled. Messages
+are stored and their events journaled in batches as the run goes, so an
+interrupted first sync keeps what it did. A download that fails, or whose
+length is not the size the server gave, is reported and that message
+left out; the run goes on but is then partial: the account's `incoming/`
+is not evaluated and its `sync.json` is not rewritten, so the next run
+starts from the same cursors and tries again. An error that stops the
+run (the server unreachable, a bad reply, a secret that does not
+resolve) does the same for that account only.
 
 ### IMAP (per mailbox)
 
@@ -932,10 +957,15 @@ from the session object, never hard-coded.
 2. `Email/changes` since `email_state` (fall back to a full `Email/query` on
    `cannotCalculateChanges`).
 3. `Email/get` on created and updated ids with
-   `[blobId, threadId, mailboxIds, keywords, receivedAt, size, messageId]`,
-   plus the properties of extensions the session offers that are not
-   derived from the message, batched by `maxObjectsInGet`.
-4. Download raw blobs for unseen messages and ingest; emit
+   `[blobId, threadId, mailboxIds, keywords, receivedAt, size]`
+   (`size` is checked against the download), plus the properties of
+   extensions the session offers that are not derived from the message,
+   batched by `maxObjectsInGet`. A `mailboxIds` entry that the journal
+   does not know (a mailbox created after step 1) is fetched with
+   `Mailbox/get` and journaled before the message's events.
+4. Download raw blobs for unseen messages (no `eid` in the journal, or
+   one whose message the store no longer holds for the account) and
+   ingest; emit
    `add`/`remove`/`flags` events from the `mailboxIds`/`keywords` diff
    (`add` with `receivedAt` and `threadId`), and `props` events when other
    properties changed. Destroyed ids → `remove` from every mailbox.
@@ -1258,7 +1288,11 @@ Global options: `--config PATH`, and `--store NAME` for commands that act on
 one store (`search`, `show`, `export`, `reindex`, `verify`). It may be
 omitted when there is only one store or `default_store` is set. `sync`
 without arguments syncs every account of every store; with account names,
-only those (and only their stores are locked).
+only those (and only their stores are locked); with `--store`, only the
+accounts of that store. It prints a summary per account (mailbox
+changes, messages changed, downloaded, stored and held, journal events,
+what the evaluation did, the mass-drop guard, problems); the exit status
+is non-zero if any account's run was not complete or had problems.
 
 `show ID` takes a message id (`sha256:…`) or a prefix of its hex digest,
 with or without `sha256:`, of at least 4 digits; a prefix that matches

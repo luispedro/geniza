@@ -107,6 +107,10 @@ class FakeJmap:
         self.session_overrides: Json = {}
         #: Called (unlocked) before each ``Email/query`` is answered.
         self.before_query: Callable[[Json], None] | None = None
+        #: Email ids whose download is one byte short.
+        self.truncate: set[str] = set()
+        #: Email ids whose download fails (HTTP 500).
+        self.fail: set[str] = set()
         self.url = ""
 
     def _id(self, prefix: str) -> str:
@@ -309,11 +313,15 @@ class FakeJmap:
         }  # fmt: skip
 
     def blob(self, blob_id: str) -> bytes | None:
+        """The bytes of a blob; None if unknown. Raises ``_Error`` for one
+        set to fail."""
         with self.lock:
             for e in self.emails.values():
                 if e.blob_id == blob_id:
                     self.downloads.append(blob_id)
-                    return e.blob
+                    if e.id in self.fail:
+                        raise _Error("serverFail")
+                    return e.blob[:-1] if e.id in self.truncate else e.blob
         return None
 
 
@@ -357,7 +365,11 @@ class _Handler(BaseHTTPRequestHandler):
             return
         parts = path.split("/")
         if len(parts) == 6 and parts[2] == "download" and parts[3] == ACCOUNT:
-            blob = fake.blob(unquote(parts[4]))
+            try:
+                blob = fake.blob(unquote(parts[4]))
+            except _Error:
+                self._send(500, b'{"type": "about:blank", "status": 500}')
+                return
             if blob is not None:
                 self._send(200, blob, "message/rfc822")
                 return

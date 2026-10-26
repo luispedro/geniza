@@ -24,10 +24,13 @@ design leaves open.
   journals against the store, and `show` prints messages only in
   `incoming/` (see M7).
 - **M8 in progress.** Secrets are done (`sshcrypt.py`, `resolve_secret`,
-  `geniza secret keys|encrypt|check`), and so is the JMAP client
-  (`sync/jmap.py`), tested against an in-process fake server
-  (`tests/jmapserver.py`); next is the sync driver that turns its
-  results into downloads, ingests and journal events (see M8).
+  `geniza secret keys|encrypt|check`), and so are the JMAP client
+  (`sync/jmap.py`) and `geniza sync` (`sync/base.py`, `sync/jmap_sync.py`:
+  mailboxes and emails into the journal, downloads, `sync.json`,
+  evaluation, the end of initialization), tested against an in-process
+  fake server (`tests/jmapserver.py`). Left: settings (`setting`
+  events), extension properties (`props`), `sync.json` in the fault
+  injection, and the run against a real Fastmail account (see M8).
 
 ## Tooling
 
@@ -92,8 +95,9 @@ src/geniza/
     bodies.py           # body pass: FTS and attachment names
     threads.py          # union-find threading
   sync/
-    base.py             # source interface shared by JMAP and IMAP
-    jmap.py
+    base.py             # geniza sync: stores, sync.json, evaluation
+    jmap.py             # read-only JMAP client
+    jmap_sync.py        # one JMAP account into the journal and store
     imap.py             # M9, after the first release
     matching.py         # stable ids and header-verified matching (M9)
   stats.py              # stats --parts
@@ -428,6 +432,27 @@ fake server (stdlib `http.server` on loopback, with a change log so
 `*/changes` answers from any state, and knobs for limits, page sizes,
 forgotten changes and meddling during a listing); the changes semantics
 and byte-exact downloads are hypothesis properties.
+
+Progress: `geniza sync`. `sync/jmap_sync.py` journals the mailboxes
+(changes, or all of them; counters left out of `props`; destroyed ones
+`gone` after the removes of their messages), then the emails changed
+since the cursor, or all of them (first run, `cannotCalculateChanges`,
+lost or damaged `sync.json`, a changed `exclude`), in batches: each
+email's `mailboxIds` and `keywords` are diffed against the replayed
+journal, and its body is downloaded only if its `eid` maps to no message
+the store holds for the account (so a purged message comes back). A
+mailbox an email names that the journal lacks is fetched first.
+Excluded mailboxes are journaled but get no adds or downloads. A download
+that fails or is not the size the server gave makes the run partial:
+`sync/base.py` then neither evaluates `incoming/` nor rewrites
+`sync.json`. After a complete run it evaluates (two-run drops from
+`sync.json`'s `absent`, the mass-drop guard, `--allow-mass-drop`) and
+writes `sync.json`; once every account of the store has one, the store's
+initialization ends. Tests cover each case against the fake server
+(with knobs for truncated and failing downloads), and a property test
+runs random server changes, forgotten changes and lost `sync.json`
+files, checking after every sync that the journal equals the server,
+that no body is downloaded twice, and that `verify` passes.
 
 ### M9 — IMAP sync (after the first release)
 
