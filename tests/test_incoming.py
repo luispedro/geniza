@@ -454,7 +454,8 @@ def test_on_delete_keep_promotes_deleted_mail(acct: Account) -> None:
 
 
 def test_empty_listing_trips_the_guard(acct: Account) -> None:
-    for i in range(1, 5):
+    n = incoming.MASS_DROP_MIN + 1
+    for i in range(n):
         acct.server.deliver(i, T0)
     acct.run(T0)
     acct.server.mail.clear()
@@ -462,15 +463,27 @@ def test_empty_listing_trips_the_guard(acct: Account) -> None:
     ev = acct.run(T0 + 2 * DAY)
     assert ev is not None and ev.drop == ()
     assert ev.guard is not None and "max_drop_fraction" in ev.guard
-    assert set(ev.withheld) == {msg(i) for i in range(1, 5)}
-    assert all(acct.fate(msg(i)) is None for i in range(1, 5))
+    assert set(ev.withheld) == {msg(i) for i in range(n)}
+    assert all(acct.fate(msg(i)) is None for i in range(n))
     # It stays tripped while the listing is empty.
     ev = acct.run(T0 + 3 * DAY)
     assert ev is not None and ev.guard is not None
     # --allow-mass-drop overrides it.
     ev = acct.run(T0 + 4 * DAY, allow_mass_drop=True)
-    assert ev is not None and len(ev.drop) == 4 and ev.guard is None
-    assert all(acct.fate(msg(i)) == "dropped" for i in range(1, 5))
+    assert ev is not None and len(ev.drop) == n and ev.guard is None
+    assert all(acct.fate(msg(i)) == "dropped" for i in range(n))
+
+
+@pytest.mark.parametrize("held", [1, incoming.MASS_DROP_MIN])
+def test_few_drops_are_not_a_mass_drop(acct: Account, held: int) -> None:
+    """Dropping every held message, if there are few, passes the fraction."""
+    for i in range(held):
+        acct.server.deliver(i, T0)
+    acct.run(T0)
+    acct.server.mail.clear()
+    acct.run(T0 + DAY)
+    ev = acct.run(T0 + 2 * DAY)
+    assert ev is not None and ev.guard is None and len(ev.drop) == held
 
 
 def test_guard_by_count(acct: Account) -> None:

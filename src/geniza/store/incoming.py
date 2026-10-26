@@ -50,6 +50,9 @@ log = logging.getLogger(__name__)
 INCOMING_DIR = "incoming"
 #: Mailbox roles whose messages are not filed (DESIGN.md, "Trash and Junk").
 UNFILED_ROLES = frozenset({"trash", "junk"})
+#: Dropping at most this many messages is never a mass drop by fraction
+#: (DESIGN.md, "Why the grace period and the guard").
+MASS_DROP_MIN = 10
 
 _FILE_NAME = re.compile(r"([0-9a-f]{64})\.eml")
 _TEMP_NAME = re.compile(r"\.[0-9a-f]{64}\.[0-9a-f]{16}\.tmp")
@@ -255,7 +258,10 @@ def evaluate(
                 f"{len(candidates)} messages to drop, more than max_drop_count"
                 f" ({settings.max_drop_count})"
             )
-        elif len(candidates) > settings.max_drop_fraction * live:
+        elif (
+            len(candidates) > MASS_DROP_MIN
+            and len(candidates) > settings.max_drop_fraction * live
+        ):
             guard = (
                 f"{len(candidates)} of {live} held messages to drop, more than"
                 f" max_drop_fraction ({settings.max_drop_fraction:g})"

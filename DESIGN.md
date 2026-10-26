@@ -692,8 +692,10 @@ servers that wrongly return an empty listing. If a run would drop more than
 `max_drop_fraction` of an account's `incoming/` or more than
 `max_drop_count` of its messages, it drops nothing for that account and
 reports why. The fraction is of the messages held and not dropped
-(including those the run would drop). Promotions, un-drops and purges go
-ahead. `geniza sync --allow-mass-drop` overrides.
+(including those the run would drop), and applies only to runs that would
+drop more than 10 messages, so an account that holds only a few can still
+drop them. Promotions, un-drops and purges go ahead.
+`geniza sync --allow-mass-drop` overrides.
 
 ### Trash and Junk
 

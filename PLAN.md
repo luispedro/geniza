@@ -350,7 +350,9 @@ lists temp files and held files of messages also in a segment, and
 replays each journal: messages in its mailboxes must be stored (in a
 segment or the account's `incoming/`, unless purged) and promotions must
 name a record of their message; the property test runs it after every
-evaluation.
+evaluation. A held copy is unlinked only after its segment record has
+been rebuilt and hashed, and the fraction rule of the mass-drop guard
+applies only above 10 drops.
 
 ### M8 — JMAP sync
 
