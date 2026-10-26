@@ -947,6 +947,23 @@ from the session object, never hard-coded.
    the server no longer has → `setting` without `value`. Which of these
    Fastmail offers, and to which token scopes, is to be checked in M8.
 
+The account synced is the session's primary mail account. The token is
+sent only to https URLs (http only to loopback, as for `url`), including
+the session's `apiUrl` and `downloadUrl`, and redirects are refused
+rather than followed (the error names the target, to put in `url`), so it
+never goes anywhere the configuration or the session did not name. The
+client sends only methods ending in `/get`, `/changes`, `/query` or
+`/queryChanges`; anything else is refused before a request is made.
+
+The full listing (first sync, `cannotCalculateChanges`) takes the
+`Email` state first (`Email/get` with no ids), then pages through
+`Email/query` sorted by `receivedAt`, each page anchored at the last id
+of the one before. `receivedAt` never changes, so a message destroyed
+meanwhile shifts nothing (with `position` paging it would make the next
+page skip one), and one created meanwhile is in `Email/changes` from the
+state taken first. If the anchor itself is destroyed (`anchorNotFound`),
+the listing starts again.
+
 JMAP state strings are atomic, so the IMAP move race does not arise; the
 two-run drop rule is applied uniformly anyway.
 

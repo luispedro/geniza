@@ -334,27 +334,38 @@ def _secret(t: _Table, field_name: str) -> Secret:
     return Secret("sshcrypt", value)
 
 
-def _url(t: _Table, key: str) -> str:
-    """An https URL, or http to a loopback host (for local test servers);
-    the token must not travel in clear over a network."""
-    url = t.required_string(key)
+def secure_url(url: str) -> bool:
+    """Whether a token may be sent to ``url``: https, or http to a loopback
+    host (local test servers). A token must not travel in clear over a
+    network."""
     try:
         parts = urlsplit(url)
         host = parts.hostname
     except ValueError:
-        raise t.error(key, f"bad URL {url!r}") from None
+        return False
     if not host:
-        raise t.error(key, f"bad URL {url!r}")
+        return False
     if parts.scheme == "https":
-        return url
+        return True
     if parts.scheme == "http":
         try:
-            loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
+            return host == "localhost" or ipaddress.ip_address(host).is_loopback
         except ValueError:
-            loopback = False
-        if loopback:
-            return url
-    raise t.error(key, f"must be an https URL, not {url!r}")
+            return False
+    return False
+
+
+def _url(t: _Table, key: str) -> str:
+    url = t.required_string(key)
+    try:
+        host = urlsplit(url).hostname
+    except ValueError:
+        host = None
+    if not host:
+        raise t.error(key, f"bad URL {url!r}")
+    if not secure_url(url):
+        raise t.error(key, f"must be an https URL, not {url!r}")
+    return url
 
 
 def _name(t: _Table, name: str, what: str) -> str:

@@ -24,8 +24,10 @@ design leaves open.
   journals against the store, and `show` prints messages only in
   `incoming/` (see M7).
 - **M8 in progress.** Secrets are done (`sshcrypt.py`, `resolve_secret`,
-  `geniza secret keys|encrypt|check`); next is the JMAP client against
-  an in-process fake server (see M8).
+  `geniza secret keys|encrypt|check`), and so is the JMAP client
+  (`sync/jmap.py`), tested against an in-process fake server
+  (`tests/jmapserver.py`); next is the sync driver that turns its
+  results into downloads, ingests and journal events (see M8).
 
 ## Tooling
 
@@ -415,6 +417,17 @@ use a fake agent (`tests/agents.py`: refusals, wrong, invalid, randomising
 and truncated signatures, arbitrary replies), the committed fixtures
 (decrypted by the fake agent and by a private real `ssh-agent`) and an
 end-to-end round trip through that real agent.
+
+Progress: the JMAP client. `sync/jmap.py` fetches the session (primary
+mail account, limits from it, insecure `apiUrl`/`downloadUrl` refused),
+allow-lists read-only methods, refuses redirects, batches `*/get` by
+`maxObjectsInGet` and `maxCallsInRequest`, merges `*/changes` pages
+(raising `CannotCalculateChanges`), lists every email through anchored
+`Email/query` pages, and downloads blobs. `tests/jmapserver.py` is the
+fake server (stdlib `http.server` on loopback, with a change log so
+`*/changes` answers from any state, and knobs for limits, page sizes,
+forgotten changes and meddling during a listing); the changes semantics
+and byte-exact downloads are hypothesis properties.
 
 ### M9 — IMAP sync (after the first release)
 
