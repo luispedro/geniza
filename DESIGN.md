@@ -575,7 +575,11 @@ would extract and store their attachments forever.
 
 Instead, such messages are held in `incoming/<account>/` as plain
 `<sha256>.eml` files — raw, uncompressed, attachments inline — until their
-fate is clear. Each account has its own `incoming/` directory, evaluated
+fate is clear. A file is written to a temp file (`.<sha256>.<random>.tmp`,
+removed by the next writer if a crash leaves it), fsynced, made read-only
+and renamed into place; its modification time is set to the account's
+received date for the message (JMAP `receivedAt`, IMAP `INTERNALDATE`),
+from which `max_age` is measured. Each account has its own `incoming/` directory, evaluated
 on its own, while segments and attachments stay shared by the store, so a
 message that several accounts archive is still stored once.
 
@@ -597,7 +601,9 @@ A newly downloaded message goes to the account's `incoming/<account>/` iff
 it is currently in one of the `incoming.mailboxes` **and** its received date
 is younger than `max_age`. Everything else goes directly to a segment.
 Hence, on a first sync of an old INBOX, only the last week lands in
-`incoming/`.
+`incoming/`. An entry of `incoming.mailboxes` (or of `sync.exclude`)
+names a mailbox by its role in any case (`"INBOX"` and `"inbox"` both
+match a JMAP inbox, and `"junk"` a Junk mailbox), or by its exact name.
 
 If the message's hash already exists in a segment, or in this account's
 `incoming/`, nothing is stored; only state events are written. A message
@@ -629,9 +635,22 @@ mailbox* is any of its synced mailboxes that is not in
   journal `promote` → unlink the `.eml`.
 - **Drop** if it has been in none of the account's synced mailboxes at the
   end of two consecutive complete runs of the account. Journal `drop`. The
-  `.eml` stays in `incoming/<account>/` for `grace`, hidden from search by
-  default, and is then unlinked (journal `purge`).
+  `.eml` stays in `incoming/<account>/` for `grace` (counted from the
+  `drop` event), hidden from search by default, and is then unlinked
+  (journal `purge`).
 - Otherwise, leave it.
+
+Each evaluation records the messages it found in none of the synced
+mailboxes (`absent` in `sync.json`, rewritten with the cursors after the
+evaluation), and the next one drops those it finds absent again. Losing
+`sync.json` only delays drops by one run. The journal batch of an
+evaluation holds its `undrop`, `promote`, `drop` and `purge` events, in
+that order; the promoted and purged files are unlinked after it. A crash
+before the unlink leaves files whose fate is already journaled: the next
+evaluation unlinks them without writing events (a promoted one is in a
+segment; a purged one is unlinked unless it is back in a synced
+mailbox, see below). A held file that does not hash to its name is
+reported and left alone.
 
 The two-run requirement covers the IMAP race where a message is moved from
 INBOX to a folder that was already synced earlier in the same run: it looks
@@ -646,7 +665,10 @@ dropped by the first and downloaded as a new message by the second
 
 A dropped message that reappears in a synced mailbox during its grace period
 (restored on the server) is un-dropped (journal `undrop`) and evaluated
-normally again.
+normally again, in the same evaluation (so a message restored into a filed
+mailbox is un-dropped and promoted). After a purge, its body is gone: a
+sync that sees it again downloads it again, as for any message it does not
+hold, and the evaluation un-drops it.
 
 With `on_delete = "keep"`, nothing is dropped: messages are promoted at
 `max_age` whether or not they still exist on the server, and the journal
@@ -666,7 +688,9 @@ The **mass-drop guard** covers the same failures acting all at once, plus
 servers that wrongly return an empty listing. If a run would drop more than
 `max_drop_fraction` of an account's `incoming/` or more than
 `max_drop_count` of its messages, it drops nothing for that account and
-reports why. `geniza sync --allow-mass-drop` overrides.
+reports why. The fraction is of the messages held and not dropped
+(including those the run would drop). Promotions, un-drops and purges go
+ahead. `geniza sync --allow-mass-drop` overrides.
 
 ### Trash and Junk
 
@@ -798,13 +822,16 @@ threads).
   Damage anywhere else is reported and the file is left alone.
 - The journal doubles as history: when a message was filed, read, deleted.
 
-`sync.json` holds only cursors and is rewritten atomically (temp + rename):
+`sync.json` holds only cursors (and, for [the evaluation](#evaluation),
+the held messages absent at the last one) and is rewritten atomically
+(temp + rename):
 
 ```json
 {
   "identity": "objectid",       // "jmap" | "objectid" | "gmail" | "headers"
   "imap": {"INBOX": {"uidvalidity": 99, "uidnext": 1235, "highestmodseq": 77812}},
-  "jmap": {"email_state": "…", "mailbox_state": "…"}
+  "jmap": {"email_state": "…", "mailbox_state": "…"},
+  "absent": ["sha256:…"]        // held messages in no synced mailbox at the last evaluation
 }
 ```
 
@@ -986,7 +1013,8 @@ segment bodies (for FTS), `incoming/`, `attachments/` and the journals.
   taken as UTC); `message_id` and `in_reply_to` are the first `<id>`,
   without brackets (a bracketless one-word `Message-ID` counts too). For a
   message only in `incoming/`, `received` is the modification time of the
-  first file of it indexed (that of the first account, on a rebuild).
+  first file of it indexed (that of the first account, on a rebuild),
+  which is the server's received date.
   `thread_id` is a thread number (see [Threads](#threads)). `body_read`
   says whether the body pass has read the message.
 - `threads(message_id, thread)` — the thread of every id seen, a

@@ -12,6 +12,9 @@ While the store is being initialized (DESIGN.md, "On-disk layout"), a
 message's record and new attachment files go into the month it was
 received in; afterwards, into the month it is stored in.
 
+``Ingester.hold`` puts a message in an account's ``incoming/`` instead
+(``store.incoming``), unless a segment has it already.
+
 Journal events come next and are the caller's: a batch of messages goes into
 segments, then their events into the journal. The caller holds the store
 lock throughout.
@@ -32,7 +35,7 @@ from geniza.mime.classify import PartClass
 from geniza.mime.names import attachment_name
 from geniza.mime.recipes import Mode, PartPlan, Policy, plan_message
 from geniza.mime.strip import Cut, moved, reconstruct, strip
-from geniza.store import attachments, segment
+from geniza.store import attachments, incoming, segment
 from geniza.store.attachments import AttachmentWriter, blob_id
 from geniza.store.journal import MSG_PREFIX
 from geniza.store.lock import StoreLock
@@ -97,6 +100,14 @@ class Added:
 
 
 @dataclass(frozen=True)
+class Held:
+    id: str
+    path: Path
+    #: False if the account's ``incoming/`` already had the message.
+    new: bool
+
+
+@dataclass(frozen=True)
 class _Extracted:
     plan: PartPlan
     blob: str
@@ -143,6 +154,8 @@ class Ingester:
         self.catalog = catalog if catalog is not None else Catalog.scan(store)
         self.segments = SegmentWriter(store, cap=cap, level=level, clock=clock)
         self.attachments = AttachmentWriter(store, clock=clock)
+        #: Accounts whose ``incoming/`` was opened (temp files removed).
+        self._incoming: set[str] = set()
 
     def __enter__(self) -> Self:
         return self
@@ -182,6 +195,21 @@ class Ingester:
         return Added(
             id, location.segment, location.offset, True, tuple(parts), fallback
         )
+
+    def hold(self, data: bytes, received: datetime, account: str) -> Added | Held:
+        """Hold a message in ``account``'s ``incoming/`` (DESIGN.md,
+        "Placement at ingest"), unless a segment has it (an ``Added`` that
+        is not new) or that ``incoming/`` has it already."""
+        id = message_id(data)
+        if (where := self.catalog.messages.get(id)) is not None:
+            return Added(id, *where, new=False)
+        if account not in self._incoming:
+            incoming.open_dir(self.store, account)
+            self._incoming.add(account)
+        path = incoming.file_path(self.store, account, id)
+        if path.exists():
+            return Held(id, path, new=False)
+        return Held(id, incoming.write(self.store, account, id, data, received), True)
 
     def _month(self, received: datetime) -> tuple[int, int] | None:
         """The month (year, month) to write a message into while

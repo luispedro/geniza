@@ -23,20 +23,18 @@ records the damage hides are left out.
 import argparse
 import logging
 import os
-import re
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from geniza.config import load, open_cache, read_store
 from geniza.index import bodies, schema, threads
 from geniza.index.envelope import Envelope
-from geniza.store import segment
+from geniza.store import incoming, segment
 from geniza.store.ingest import Catalog
 from geniza.store.journal import (
-    MSG_PREFIX,
     JournalError,
     State,
     journal_files,
@@ -49,8 +47,6 @@ if TYPE_CHECKING:
     from geniza.cli import Output
 
 log = logging.getLogger(__name__)
-
-_INCOMING_NAME = re.compile(r"([0-9a-f]{64})\.eml")
 
 
 @dataclass
@@ -209,18 +205,6 @@ def _dirs(root: Path) -> set[str]:
     return {p.name for p in root.iterdir() if p.is_dir()} if root.is_dir() else set()
 
 
-def _files(store: Path, account: str) -> dict[str, Path]:
-    """The messages in an account's ``incoming/``, by id."""
-    root = store / "incoming" / account
-    if not root.is_dir():
-        return {}
-    return {
-        MSG_PREFIX + m[1]: path
-        for path in sorted(root.iterdir())
-        if (m := _INCOMING_NAME.fullmatch(path.name))
-    }
-
-
 def _incoming(
     conn: sqlite3.Connection,
     account: str,
@@ -247,7 +231,7 @@ def _incoming(
         )
         if known is not None:
             continue
-        received = datetime.fromtimestamp(int(st.st_mtime), UTC)
+        received = incoming.received_of(st)
         envelope = Envelope.parse(head)
         conn.execute(
             _INSERT_MESSAGE,
@@ -340,7 +324,7 @@ def _rebuild(store: Path, conn: sqlite3.Connection, report: Report) -> None:
         state = _replay(store, account, report)
         if account in journals:
             _state(conn, account, journal, state)
-        _incoming(conn, account, _files(store, account), state, report)
+        _incoming(conn, account, incoming.files(store, account), state, report)
     _dropped(conn)
 
 
@@ -357,7 +341,7 @@ def _refresh(store: Path, conn: sqlite3.Connection, report: Report) -> None:
         journals | _dirs(store / "incoming") | read.keys() | held.keys()
     ):
         journal = _journal(store, account) if account in journals else None
-        files = _files(store, account)
+        files = incoming.files(store, account)
         moved = journal != read.get(account)
         if not moved and files.keys() == held.get(account, set()):
             continue

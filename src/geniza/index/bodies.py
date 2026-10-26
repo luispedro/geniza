@@ -21,8 +21,7 @@ from typing import Any
 from geniza.index import schema
 from geniza.mime import tree
 from geniza.mime.text import clean, texts
-from geniza.store import segment
-from geniza.store.journal import MSG_PREFIX
+from geniza.store import incoming, segment
 from geniza.store.parts import PartRecord, parse_parts
 from geniza.store.segment import SegmentError
 
@@ -104,4 +103,4 @@ def incoming_file(store: Path, conn: sqlite3.Connection, id: str) -> Path:
     (account,) = conn.execute(
         "SELECT min(account) FROM incoming WHERE msg = ?", (id,)
     ).fetchone()
-    return store / "incoming" / str(account) / f"{id.removeprefix(MSG_PREFIX)}.eml"
+    return incoming.file_path(store, str(account), id)

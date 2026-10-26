@@ -18,8 +18,10 @@ design leaves open.
   index (`reindex`, kept up to date from segments, journals and
   `incoming/`), threading, message text, which `show` prints, the body
   pass and `search` work, and the "done when" holds: an updated index
-  searches like a rebuilt one (see M6). Next: attachment text, or
-  straight on to M7.
+  searches like a rebuilt one (see M6). Attachment text is left for later.
+- **M7 in progress.** Placement, evaluation and its application work and
+  are tested against a fake source (see M7). Next: `verify` checks
+  `incoming/`, and `show` of a message only in `incoming/`.
 
 ## Tooling
 
@@ -328,6 +330,21 @@ two-run rule applies to every source), an empty listing tripping the
 guard, a message held in two accounts' `incoming/` (one drops it, the other
 promotes it; a later promotion writes nothing), and a promotion interrupted
 after the segment write.
+
+Progress: `store/incoming.py` holds messages (`Ingester.hold`: temp file,
+read-only, dated with the server's received date), decides placement,
+evaluates an account's `incoming/` from its replayed journal and files
+(`evaluate`, pure) and applies the result (`apply`: segment records, one
+journal batch, unlinks). The two-run rule takes the messages the previous
+evaluation found absent, which sync will keep in `sync.json`. The tests
+drive a fake source (a JMAP-like account whose mailboxes a test script
+changes) through a small sync that journals it, covering every scenario
+above and the partial run, a purge interrupted before the unlink, a
+message restored after its purge, excluded mailboxes and a damaged held
+file; a property test runs random server changes and runs and checks that
+nothing downloaded is lost, that drops follow two absent runs (never with
+`keep`), that purges wait for the grace period, and that filed or old
+messages are not left in `incoming/`.
 
 ### M8 — JMAP sync
 
