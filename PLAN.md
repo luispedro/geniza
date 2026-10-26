@@ -22,7 +22,10 @@ design leaves open.
 - **M7 done.** Placement, evaluation and its application work and are
   tested against a fake source, `verify` checks `incoming/` and the
   journals against the store, and `show` prints messages only in
-  `incoming/` (see M7). Next: M8, JMAP sync.
+  `incoming/` (see M7).
+- **M8 in progress.** Secrets are done (`sshcrypt.py`, `resolve_secret`,
+  `geniza secret keys|encrypt|check`); next is the JMAP client against
+  an in-process fake server (see M8).
 
 ## Tooling
 
@@ -401,6 +404,17 @@ server is tested.
 **Done when:** the first sync of a real Fastmail account completes, a second
 sync with no changes downloads nothing, and moves and flag changes show up
 as journal events only.
+
+Progress: secrets. `sshcrypt.py` speaks the agent protocol with
+bounds-checked parsing (any reply, however malformed, is an
+`SshcryptError`), verifies every signature, signs twice when encrypting,
+and keeps the wire format of the original tool; `config.resolve_secret`
+decrypts an `sshcrypt:` value or runs a `*_command`; `geniza secret keys`,
+`encrypt` (`--key`, or the only usable key) and `check` work. The tests
+use a fake agent (`tests/agents.py`: refusals, wrong, invalid, randomising
+and truncated signatures, arbitrary replies), the committed fixtures
+(decrypted by the fake agent and by a private real `ssh-agent`) and an
+end-to-end round trip through that real agent.
 
 ### M9 — IMAP sync (after the first release)
 

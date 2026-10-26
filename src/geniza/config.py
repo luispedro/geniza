@@ -3,7 +3,8 @@
 
 ``load`` reads and checks the configuration file and returns plain
 dataclasses; nothing else in geniza looks at the TOML. Secrets are kept as
-the configured ``sshcrypt:`` value or command and are never resolved here.
+the configured ``sshcrypt:`` value or command; ``resolve_secret`` turns one
+into the secret when it is needed (DESIGN.md, "Secrets").
 
 ``init_store`` writes a new store's ``store.toml`` (once, under the store
 lock) or checks an existing one; ``open_cache`` makes sure a cache
@@ -15,6 +16,7 @@ import logging
 import os
 import re
 import secrets
+import subprocess
 import tomllib
 import uuid
 from collections.abc import Callable, Mapping
@@ -477,6 +479,40 @@ def load(path: Path | None = None, env: Mapping[str, str] | None = None) -> Conf
     except tomllib.TOMLDecodeError as e:
         raise ConfigError(f"{path}: {e}") from None
     return parse(data, path, env)
+
+
+def resolve_secret(secret: Secret, where: str) -> str:
+    """The secret itself: an ``sshcrypt:`` value decrypted with the agent
+    (``SSH_AUTH_SOCK``), or the stdout of a ``*_command`` run through the
+    shell, minus a trailing newline. ``where`` names it in errors, which
+    never include the secret or the command's output."""
+    from geniza import sshcrypt
+
+    if secret.kind == "sshcrypt":
+        try:
+            blob = sshcrypt.decode(secret.value)
+            with sshcrypt.Agent() as agent:
+                data = sshcrypt.decrypt(agent, blob)
+        except sshcrypt.SshcryptError as e:
+            raise ConfigError(f"{where}: {e}") from None
+    else:
+        try:
+            # stderr and stdin stay the terminal's, for pass, pinentry etc.
+            done = subprocess.run(
+                secret.value, shell=True, stdout=subprocess.PIPE, check=False
+            )
+        except OSError as e:
+            raise ConfigError(f"{where}: command failed: {e.strerror}") from None
+        if done.returncode != 0:
+            raise ConfigError(f"{where}: command exited with status {done.returncode}")
+        data = done.stdout.removesuffix(b"\n")
+    try:
+        value = data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ConfigError(f"{where}: not valid UTF-8") from None
+    if not value:
+        raise ConfigError(f"{where}: empty")
+    return value
 
 
 # --- store.toml --------------------------------------------------------------

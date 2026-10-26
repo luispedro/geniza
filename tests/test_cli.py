@@ -16,7 +16,6 @@ def test_help(capsys: pytest.CaptureFixture[str]) -> None:
         ["sync"],
         ["search", "foo"],
         ["account", "rename", "a", "b"],
-        ["secret", "keys"],
     ],
 )
 def test_unimplemented_commands_fail_cleanly(argv: list[str]) -> None:

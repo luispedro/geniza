@@ -194,6 +194,9 @@ of two ways, and exactly one must be present:
   decryptable only while the right SSH key is loaded in `ssh-agent`.
 - **`<field>_command = "…"`** — run through the shell; its stdout, minus a
   trailing newline, is the secret. For users of `pass`, keyrings, etc.
+  The command keeps the terminal's stdin and stderr (so it can prompt);
+  a non-zero exit status, an empty secret or output that is not UTF-8 is
+  an error, and the error never includes the output.
 
 A plain-text value (anything without the `sshcrypt:` prefix) is rejected
 with an error that points to `geniza secret encrypt`.
@@ -243,9 +246,14 @@ geniza secret encrypt [--key FINGERPRINT]  # reads the secret with getpass, prin
 geniza secret check                        # decrypts every secret in the config, prints OK/error per account, never the secret
 ```
 
-`encrypt` reads the secret from the terminal (or stdin when it is not a
-terminal), never from arguments, which would leave it in shell history and
-`ps`.
+`encrypt` reads the secret from the terminal (or stdin, minus a trailing
+newline, when it is not a terminal), never from arguments, which would
+leave it in shell history and `ps`. `--key` takes a fingerprint as
+`ssh-keygen -l` prints it, with or without `SHA256:`; it may be left out
+only when the agent holds exactly one usable key, and with several the
+error lists them. `check` obtains every secret of the configuration (of
+one store with `--store`), running `*_command`s too, and exits non-zero
+if any fails.
 
 ### Properties and limits
 

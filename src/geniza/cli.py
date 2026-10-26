@@ -85,6 +85,13 @@ def _cmd_reindex(args: argparse.Namespace, out: Output) -> int:
     return reindex.run(args, out)
 
 
+def _cmd_secret(args: argparse.Namespace, out: Output) -> int:
+    from geniza import secret
+
+    handler: Handler = getattr(secret, args.secret_command)
+    return handler(args, out)
+
+
 def _cmd_import_local(args: argparse.Namespace, out: Output) -> int:
     from geniza import debug
 
@@ -236,9 +243,13 @@ def build_parser() -> argparse.ArgumentParser:
         ("check", "check that every secret in the config decrypts"),
     ]:
         s = ssub.add_parser(name, help=help, parents=[common])
-        s.set_defaults(handler=_not_implemented, command_name=f"secret {name}")
+        s.set_defaults(handler=_cmd_secret, command_name=f"secret {name}")
         if name == "encrypt":
-            s.add_argument("--key", metavar="FINGERPRINT")
+            s.add_argument(
+                "--key",
+                metavar="FINGERPRINT",
+                help="key to encrypt to (default: the only usable key)",
+            )
 
     p = add("debug", "development-only commands")
     dsub = p.add_subparsers(dest="debug_command", required=True)
