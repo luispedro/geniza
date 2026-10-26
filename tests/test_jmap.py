@@ -276,6 +276,99 @@ def test_download_missing(server: FakeJmap) -> None:
         c.download("Gnothing")
 
 
+# --- connections and parallel downloads --------------------------------------
+
+
+def test_connection_reused(server: FakeJmap) -> None:
+    box = server.add_mailbox("Inbox")
+    id_ = server.add_email(message(1), {box})
+    with connect(server) as c:
+        c.get("Mailbox")
+        (email,) = c.get("Email", [id_], ["blobId"]).objects
+        assert c.download(email["blobId"]) == message(1)
+        with pytest.raises(JmapError, match="HTTP 404"):
+            c.download("Gnothing")
+        # An error response closes its connection.
+        c.get("Mailbox")
+    assert server.connections == 2
+
+
+def test_connection_closed_by_the_server(server: FakeJmap) -> None:
+    server.hang_up = True
+    with connect(server) as c:
+        for _ in range(3):
+            c.get("Mailbox")
+    assert server.connections == 4
+    assert server.methods == ["Mailbox/get"] * 3
+
+
+def emails(fake: FakeJmap, blobs: list[bytes]) -> list[tuple[str, int]]:
+    box = fake.add_mailbox("Inbox")
+    ids = [fake.add_email(b, {box}) for b in blobs]
+    return [(fake.emails[i].blob_id, len(fake.emails[i].blob)) for i in ids]
+
+
+def test_downloads_in_parallel(server: FakeJmap) -> None:
+    blobs = [message(i) for i in range(12)]
+    wanted = emails(server, blobs)
+    server.download_delay = 0.05
+    with connect(server) as c:
+        assert list(c.downloads(wanted, connections=4)) == blobs
+    assert 1 < server.max_downloads <= 4
+    assert server.connections <= 5
+
+
+def test_downloads_report_each_failure(server: FakeJmap) -> None:
+    blobs = [message(i) for i in range(6)]
+    wanted = emails(server, blobs)
+    server.fail = {i for i, e in server.emails.items() if e.blob == message(2)}
+    with connect(server) as c:
+        got = list(c.downloads([*wanted, ("Gnothing", 1)], connections=3))
+    assert [g for g in got if isinstance(g, bytes)] == blobs[:2] + blobs[3:]
+    assert isinstance(got[2], JmapError) and "HTTP 500" in str(got[2])
+    assert isinstance(got[6], JmapError) and "HTTP 404" in str(got[6])
+
+
+def test_downloads_bounded_by_bytes(
+    server: FakeJmap, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(jmap, "IN_FLIGHT", len(message(1)) - 1)
+    blobs = [message(i) for i in range(5)]
+    wanted = emails(server, blobs)
+    server.download_delay = 0.02
+    with connect(server) as c:
+        assert list(c.downloads(wanted, connections=4)) == blobs
+    assert server.max_downloads == 1
+
+
+def test_downloads_closed_early(server: FakeJmap) -> None:
+    blobs = [message(i) for i in range(20)]
+    wanted = emails(server, blobs)
+    server.download_delay = 0.02
+    with connect(server) as c:
+        it = c.downloads(wanted, connections=2)
+        assert next(it) == blobs[0]
+        it.close()
+        assert len(server.downloads) < len(blobs)
+        assert c.download(wanted[-1][0]) == blobs[-1]
+
+
+@settings(max_examples=25, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(
+    st.lists(st.binary(max_size=1 << 12), max_size=12),
+    st.integers(1, 5),
+    st.integers(0, 1 << 14),
+)
+def test_downloads_in_order(
+    module_server: FakeJmap, blobs: list[bytes], connections: int, in_flight: int
+) -> None:
+    wanted = emails(module_server, blobs)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(jmap, "IN_FLIGHT", in_flight)
+        with connect(module_server) as c:
+            assert list(c.downloads(wanted, connections=connections)) == blobs
+
+
 # --- retries -----------------------------------------------------------------
 
 

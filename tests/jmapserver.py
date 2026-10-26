@@ -12,12 +12,15 @@ account lacks is ``unknownMethod``. Tests change the account through
 from any earlier state. Every method name received is recorded in
 ``methods``, every downloaded blob in ``downloads``; a method that would
 modify the account is answered with ``unknownMethod`` and recorded too,
-so tests can assert it never arrives.
+so tests can assert it never arrives. It speaks HTTP/1.1 and keeps
+connections open; ``connections`` counts those accepted, and
+``max_downloads`` the most downloads it served at once.
 """
 
 import hashlib
 import json
 import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -108,6 +111,10 @@ class FakeJmap:
         self.downloads: list[str] = []
         self.get_sizes: list[int] = []
         self.requests = 0
+        self.connections = 0
+        #: Downloads being served, and the most served at once.
+        self.active_downloads = 0
+        self.max_downloads = 0
         self._next = 0
         # Knobs.
         self.max_objects_in_get = 500
@@ -129,6 +136,11 @@ class FakeJmap:
         #: Answers to the next requests, whatever they ask, each taken off
         #: the front: an HTTP status and a ``Retry-After`` value (or None).
         self.busy: list[tuple[int, str | None]] = []
+        #: Close each connection after one response without saying so, as
+        #: a server does with a connection left idle too long.
+        self.hang_up = False
+        #: Seconds each download takes.
+        self.download_delay = 0.0
         self.url = ""
 
     def _id(self, prefix: str) -> str:
@@ -401,9 +413,18 @@ class _Error(Exception):
 
 class _Handler(BaseHTTPRequestHandler):
     server: _Server
+    protocol_version = "HTTP/1.1"
+    # Headers and body are written separately: without TCP_NODELAY each
+    # response on a kept connection waits for a delayed ACK.
+    disable_nagle_algorithm = True
 
     def log_message(self, format: str, *args: Any) -> None:
         pass
+
+    def setup(self) -> None:
+        super().setup()
+        with self.server.fake.lock:
+            self.server.fake.connections += 1
 
     def _authorized(self) -> bool:
         """Whether to answer the request: authorized, and not turned away
@@ -432,6 +453,8 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
+        if self.server.fake.hang_up:
+            self.close_connection = True
 
     def do_GET(self) -> None:
         fake = self.server.fake
@@ -446,23 +469,32 @@ class _Handler(BaseHTTPRequestHandler):
             return
         parts = path.split("/")
         if len(parts) == 6 and parts[2] == "download" and parts[3] == ACCOUNT:
+            with fake.lock:
+                fake.active_downloads += 1
+                fake.max_downloads = max(fake.max_downloads, fake.active_downloads)
             try:
+                time.sleep(fake.download_delay)
                 blob = fake.blob(unquote(parts[4]))
             except _Error:
                 self._send(500, b'{"type": "about:blank", "status": 500}')
                 return
+            finally:
+                with fake.lock:
+                    fake.active_downloads -= 1
             if blob is not None:
                 self._send(200, blob, "message/rfc822")
                 return
         self._send(404, b'{"type": "about:blank", "status": 404}')
 
     def do_POST(self) -> None:
+        # Read first: a body left unread would be taken for the next
+        # request on the connection.
+        body = self.rfile.read(int(self.headers["Content-Length"]))
         if not self._authorized():
             return
         if urlsplit(self.path).path != "/jmap/api":
             self._send(404, b"{}")
             return
-        body = self.rfile.read(int(self.headers["Content-Length"]))
         try:
             request = json.loads(body)
             if not isinstance(request.get("methodCalls"), list):

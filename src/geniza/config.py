@@ -53,6 +53,10 @@ _CACHEDIR_TAG_TEXT = (
     + "# For information about cache directory tags, see https://bford.info/cachedir/\n"
 )
 
+#: Most downloads at once an account may ask for: more do not help, and
+#: a server may take them for abuse.
+MAX_CONNECTIONS = 16
+
 _NAME = re.compile(r"[a-z0-9_-]+")
 _SIZE = re.compile(r"(\d+)\s*(B|KiB|MiB|GiB)?")
 _SIZE_UNITS = {None: 1, "B": 1, "KiB": 1 << 10, "MiB": 1 << 20, "GiB": 1 << 30}
@@ -112,6 +116,8 @@ class Account:
     url: str
     token: Secret
     exclude: tuple[str, ...] = ()
+    #: Downloads at once.
+    connections: int = 4
     no_stable_id_ok: bool = False
 
 
@@ -420,6 +426,11 @@ def _account(t: _Table, name: str, stores: Mapping[str, Store]) -> Account:
     token = _secret(t, "token")
     sync = t.table("sync")
     exclude = sync.str_list("exclude", ())
+    connections = sync.integer("connections", Account.connections)
+    if not 1 <= connections <= MAX_CONNECTIONS:
+        raise sync.error(
+            "connections", f"must be an integer from 1 to {MAX_CONNECTIONS}"
+        )
     sync.finish()
     no_stable_id_ok = t.boolean("no_stable_id_ok", False)
     t.finish()
@@ -430,6 +441,7 @@ def _account(t: _Table, name: str, stores: Mapping[str, Store]) -> Account:
         url=url,
         token=token,
         exclude=exclude,
+        connections=connections,
         no_stable_id_ok=no_stable_id_ok,
     )
 

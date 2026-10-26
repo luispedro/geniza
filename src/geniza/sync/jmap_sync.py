@@ -8,7 +8,9 @@ Each email's ``mailboxIds`` and ``keywords`` are compared with the
 replayed journal, giving ``add``/``remove``/``flags`` events; its body is
 downloaded only if the journal does not map its id (``eid``) to a message
 the store still holds. Messages are stored and their events journaled in
-batches, so an interrupted first sync keeps what it did.
+batches, so an interrupted first sync keeps what it did. A batch's bodies
+are downloaded over several connections at once
+(``[accounts.<name>.sync] connections``), and stored in order.
 
 Excluded mailboxes (``[accounts.<name>.sync] exclude``) get ``mbox``
 events like the others, but nothing is added to them and no message is
@@ -25,7 +27,8 @@ run and writes the returned cursors to ``sync.json``.
 """
 
 import logging
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Collection, Iterable, Iterator, Sequence
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import batched
@@ -102,6 +105,26 @@ class Cursors:
         return {"email_state": self.email_state, "mailbox_state": self.mailbox_state}
 
 
+@dataclass(frozen=True)
+class _Plan:
+    """What the journal says of one email, worked out before the batch's
+    downloads start."""
+
+    obj: Json
+    #: Mailboxes it is in that the journal knows, and those of them synced.
+    boxes: set[str]
+    synced: list[str]
+    keywords: frozenset[str]
+    #: Message journaled in each mailbox.
+    journaled: dict[str, str]
+    #: The stored message its id maps to; None if it must be downloaded.
+    msg: str | None
+
+    @property
+    def download(self) -> bool:
+        return bool(self.synced) and self.msg is None
+
+
 def _check[T](value: Any, kind: type[T] | tuple[type, ...], what: str) -> T:
     if not isinstance(value, kind):
         raise JmapError(f"bad {what} from the server")
@@ -134,6 +157,7 @@ class JmapSync:
         settings: IncomingSettings,
         exclude: Collection[str],
         now: datetime,
+        connections: int = 4,
     ) -> None:
         self.client = client
         self.ingester = ingester
@@ -143,6 +167,7 @@ class JmapSync:
         self.settings = settings
         self.exclude = exclude
         self.now = now
+        self.connections = connections
         self.progress = Progress()
 
     def run(self, email_state: str | None, mailbox_state: str | None) -> Cursors:
@@ -258,15 +283,22 @@ class JmapSync:
         if unknown:
             got = self.client.get("Mailbox", sorted(unknown))
             self._write(self._mbox_events(got.objects))
+        # Nothing below changes the plans of the other emails of the batch
+        # before its events are written: an id is in a batch once, and
+        # storing a message never unstores another.
+        plans = [self._plan(obj) for obj in objects]
+        wanted = (self._blob(p.obj) for p in plans if p.download)
         events: list[Event] = []
-        for obj in objects:
-            events += self._email(obj)
+        with closing(
+            self.client.downloads(wanted, connections=self.connections)
+        ) as bodies:
+            for plan in plans:
+                events += self._email(plan, bodies)
         self._write(events)
 
-    def _email(self, obj: Json) -> list[Event]:
+    def _plan(self, obj: Json) -> _Plan:
         state = self.state
         rid = obj["id"]
-        self.progress.emails += 1
         # Mailboxes neither known nor found (destroyed meanwhile) are
         # left for the next run.
         boxes = {m for m in _id_set(obj, "mailboxIds") if m in state.mailboxes}
@@ -276,14 +308,36 @@ class JmapSync:
         keywords = frozenset(_id_set(obj, "keywords"))
         journaled = {m: rids[rid] for m, rids in state.contents.items() if rid in rids}
         msg = state.eids.get(rid)
+        if synced and msg is not None and not self._stored(msg):
+            msg = None
+        return _Plan(obj, boxes, synced, keywords, journaled, msg)
+
+    @staticmethod
+    def _blob(obj: Json) -> tuple[str, int]:
+        blob = _check(obj.get("blobId"), str, "blobId")
+        size = obj.get("size")
+        if type(size) is not int:
+            raise JmapError("bad size from the server")
+        return blob, size
+
+    def _email(self, plan: _Plan, bodies: Iterator[bytes | JmapError]) -> list[Event]:
+        """The events of one email; ``bodies`` yields the downloads of the
+        planned ones, in order."""
+        state = self.state
+        obj, synced, keywords, journaled = (
+            plan.obj, plan.synced, plan.keywords, plan.journaled,
+        )  # fmt: skip
+        rid = obj["id"]
+        self.progress.emails += 1
         events: list[Event] = [
             Remove(msg=journaled[m], mbox=m, rid=rid)
-            for m in sorted(journaled.keys() - boxes)
+            for m in sorted(journaled.keys() - plan.boxes)
         ]
         if not synced:
             return events
-        if msg is None or not self._stored(msg):
-            msg = self._download(obj, synced)
+        msg = plan.msg
+        if msg is None:
+            msg = self._store(obj, synced, next(bodies))
             if msg is None:
                 return []
         received = self._received(obj)
@@ -320,18 +374,15 @@ class JmapSync:
             or incoming.file_path(self.ingester.store, self.account, msg).exists()
         )
 
-    def _download(self, obj: Json, synced: list[str]) -> str | None:
-        """Download and store an email; its id, or None (a problem)."""
+    def _store(
+        self, obj: Json, synced: list[str], data: bytes | JmapError
+    ) -> str | None:
+        """Store a downloaded email; its id, or None (a problem)."""
         rid = obj["id"]
-        blob = _check(obj.get("blobId"), str, "blobId")
-        size = obj.get("size")
-        if type(size) is not int:
-            raise JmapError("bad size from the server")
+        _, size = self._blob(obj)
         received = self._received(obj)
-        try:
-            data = self.client.download(blob)
-        except JmapError as e:
-            self.progress.problems.append(f"email {rid}: {e}")
+        if isinstance(data, JmapError):
+            self.progress.problems.append(f"email {rid}: {data}")
             return None
         self.progress.downloaded += 1
         self.progress.bytes += len(data)

@@ -69,7 +69,7 @@ def test_defaults_and_xdg_fallbacks() -> None:
     a = c.accounts["a"]
     assert (a.store, a.type, a.url) == ("s", "jmap", "https://h/jmap")
     assert a.token == Secret("sshcrypt", TOKEN)
-    assert (a.exclude, a.no_stable_id_ok) == ((), False)
+    assert (a.exclude, a.connections, a.no_stable_id_ok) == ((), 4, False)
     assert c.accounts_of("s") == [a]
 
 
@@ -171,6 +171,9 @@ def test_design_incoming_defaults() -> None:
         (config(incoming={"max_drop_count": 2.0}), "non-negative integer"),
         (config(incoming={"mailboxes": "INBOX"}), "list of non-empty strings"),
         (config(accounts={"a": account(no_stable_id_ok=1)}), "true or false"),
+        (config(accounts={"a": account(sync={"connections": 0})}), "from 1 to 16"),
+        (config(accounts={"a": account(sync={"connections": 17})}), "from 1 to 16"),
+        (config(accounts={"a": account(sync={"connections": "4"})}), "integer"),
     ],
 )
 def test_invalid(data: dict[str, Any], message: str) -> None:

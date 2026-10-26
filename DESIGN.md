@@ -907,6 +907,7 @@ of the store has a `sync.json` with cursors, written by a complete run.
 ```toml
 [accounts.work.sync]
 exclude = []              # mailbox names (IMAP) or roles, e.g. ["junk"]
+connections = 4           # downloads at once, 1 to 16 (JMAP)
 ```
 
 An excluded mailbox is still journaled (`mbox`, so the folder tree is
@@ -1003,14 +1004,31 @@ never goes anywhere the configuration or the session did not name. The
 client sends only methods ending in `/get`, `/changes`, `/query` or
 `/queryChanges`; anything else is refused before a request is made.
 
+Connections are kept open and reused (HTTP/1.1 keep-alive), and the
+bodies of a batch are downloaded over `connections` connections at once,
+then stored and journaled in the order of the batch, so a run writes
+what a run with one connection would, in the same order (see
+[Write ordering](#write-ordering-and-crash-safety)). Far from the
+server, downloading one message after another is limited by latency,
+not bandwidth: a new connection costs round trips for TCP and TLS and
+starts slow, and each reply waits a round trip more. Against Fastmail,
+reusing connections halved the time per message and four connections
+gave most of what more could; the default is 4, and more than 16 is
+refused (a server may take them for abuse). Downloads run ahead of the
+message being stored by at most 64 MiB (by the sizes `Email/get` gave;
+always at least one message), which bounds the memory they hold.
+
 A request answered with HTTP 429, 502, 503 or 504 (rate limiting, or a
 server or proxy briefly unavailable) is sent again, up to 5 times: after
 the `Retry-After` the server gives (seconds or a date), else after 1 s,
 doubling with each pause that had no `Retry-After`. A `Retry-After` of
 more than 5 minutes is an error (it stops the run, as any error does)
 rather than a pause. Since every request only reads, sending one again
-is harmless. Other HTTP errors, and network errors, are not retried:
-the run stops, and the next run starts from the same cursors.
+is harmless. A kept connection that the server closed while it was idle
+is replaced by a new one and the request sent on it. Other HTTP errors,
+and network errors, are not retried: the run stops (a failed download
+only leaves the run partial, see [Sync](#sync)), and the next run starts
+from the same cursors.
 
 The full listing (first sync, `cannotCalculateChanges`) takes the
 `Email` state first (`Email/get` with no ids), then pages through
@@ -1393,8 +1411,9 @@ repeat. It is meant to be written early, to set the defaults from real mail.
 - MIME: stdlib `email` with `policy.default` for analysis. All byte-range
   work (stub offsets, splicing) is done on the raw bytes, never on a
   re-serialised `email.message` object.
-- JMAP: plain HTTP + JSON; stdlib `urllib` is enough, with downloads streamed
-  to temp files.
+- JMAP: plain HTTP + JSON over stdlib `http.client`, which (unlike
+  `urllib`) keeps connections open; downloads are held in memory, bounded
+  by the 64 MiB they may run ahead (see [JMAP](#jmap)).
 - Secrets: `cryptography` (AES-GCM, HKDF, Ed25519/RSA signature
   verification), none of which the standard library provides. It is the
   only third-party dependency of the first release.

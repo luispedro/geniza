@@ -277,16 +277,17 @@ def sync_account(
     previous = read_sync(path, account.name)
     try:
         token = resolve_secret(account.token, f"accounts.{account.name}.token")
-        client = connect(account.url, token)
-        state = journal.replay(path, account.name)
-        writer = JournalWriter(path, account.name, clock=clock)
-        run = JmapSync(
-            client, ing, writer, state,
-            settings=store.incoming, exclude=account.exclude, now=now,
-        )  # fmt: skip
-        report.progress = run.progress
-        cursors = previous.jmap if previous.exclude == account.exclude else {}
-        new = run.run(cursors.get("email_state"), cursors.get("mailbox_state"))
+        with connect(account.url, token) as client:
+            state = journal.replay(path, account.name)
+            writer = JournalWriter(path, account.name, clock=clock)
+            run = JmapSync(
+                client, ing, writer, state,
+                settings=store.incoming, exclude=account.exclude, now=now,
+                connections=account.connections,
+            )  # fmt: skip
+            report.progress = run.progress
+            cursors = previous.jmap if previous.exclude == account.exclude else {}
+            new = run.run(cursors.get("email_state"), cursors.get("mailbox_state"))
     except (ConfigError, JmapError, JournalError) as e:
         report.error = str(e)
         return report

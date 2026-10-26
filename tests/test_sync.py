@@ -198,6 +198,20 @@ def test_mailbox_events(env: Env) -> None:
     assert boxes["2020"].props == {"myRights": {"mayReadItems": True}, "color": "#3a7"}
 
 
+@pytest.mark.parametrize("connections", [1, 3])
+def test_downloads_in_parallel(env: Env, connections: int) -> None:
+    for i in range(10):
+        env.fake.add_email(message(i), {env.inbox}, received=OLD)
+    env.fake.download_delay = 0.02
+    env.config = make_config(
+        env.root, {"acct": env.fake}, acct={"sync": {"connections": connections}}
+    )
+    report = env.sync()
+    assert report.ok and report.progress.downloaded == 10
+    assert 1 <= env.fake.max_downloads <= connections
+    check_journal(env.store, env.fake)
+
+
 def test_second_sync_downloads_nothing(env: Env) -> None:
     for i in range(5):
         env.fake.add_email(message(i), {env.inbox}, received=OLD)

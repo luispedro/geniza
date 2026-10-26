@@ -30,7 +30,8 @@ design leaves open.
   evaluation, the end of initialization), tested against an in-process
   fake server (`tests/jmapserver.py`), including fault injection of whole
   syncs, and settings (`setting` events for identities, Sieve scripts
-  and the vacation response), and retries on rate limiting. Left:
+  and the vacation response), retries on rate limiting, and parallel
+  downloads over kept connections. Left:
   extension properties (`props`), and the run against a real Fastmail
   account (see M8).
 
@@ -492,6 +493,20 @@ gives up at once if asked to wait more than five minutes. The fake
 server's `busy` knob turns requests away; tests cover the API, the
 session and downloads, giving up, and statuses that are not retried.
 
+Progress: download speed. The first real run was slow, and measuring it
+showed the time went to round trips, not to ingest or bandwidth: `urllib`
+opened a new connection (TCP and TLS) for each message, and messages
+were downloaded one after another. The client now uses `http.client`
+with a pool of kept connections (a connection the server closed while
+idle is replaced), and `Client.downloads` fetches a batch's bodies over
+`[accounts.<name>.sync] connections` connections (default 4), yielding
+them in order and running at most 64 MiB ahead. The sync plans every
+email of a batch before downloading, so storing and journaling stay
+serial and in order. The fake server speaks HTTP/1.1 and counts
+connections and concurrent downloads; tests cover reuse, a server that
+hangs up, failures within a parallel batch, the byte bound, closing
+early, and order (a hypothesis property).
+
 ### M9 — IMAP sync (after the first release)
 
 - `imapclient`; capability detection; CONDSTORE/QRESYNC, with plain
@@ -513,9 +528,11 @@ and a message moved between folders is matched without re-downloading.
   sync a day's mail, `borg create` again, and report the deduplicated size
   added. It should be close to the size of the new mail.
 - `compact` stays out of scope; `verify` reports orphaned attachments.
-- If a first sync is too slow: ingest is single-process. Split
-  `Ingester.add` into a pure planning step (parse, classify, strip, check)
-  run in worker processes and a commit step in the main one.
+- If a first sync is still too slow: measure first. Downloads were the
+  bottleneck (see M8, "download speed"), far ahead of ingest; only if
+  ingest becomes it, split `Ingester.add` into a pure planning step
+  (parse, classify, strip, check) run in worker processes and a commit
+  step in the main one.
 - First release (JMAP only; does not wait for M9).
 
 ## Order and gates

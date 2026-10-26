@@ -13,6 +13,11 @@ loopback host), and redirects are refused rather than followed, so it
 never goes anywhere the session did not name. It is never put in an
 exception or a log line.
 
+Connections are kept open and reused (HTTP/1.1 keep-alive): a new one
+costs round trips for TCP and TLS, and starts slow. ``downloads`` fetches
+blobs over several connections at once, since a far server's latency,
+not its bandwidth, is what limits one download after another.
+
 A request answered with HTTP 429, 502, 503 or 504 is sent again after a
 pause (``Retry-After`` when the server gives one, else a doubling
 backoff), up to ``RETRIES`` times. Every request only reads, so sending
@@ -22,16 +27,20 @@ JMAP objects are returned as the server sent them (``dict``s of JSON
 values), since the journal keeps unknown properties verbatim.
 """
 
+import http.client
 import json
+import ssl
+import threading
 import time
-import urllib.error
-import urllib.request
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections import deque
+from collections.abc import Callable, Generator, Iterable, Iterator, Mapping, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any, Self
-from urllib.parse import quote
+from urllib.parse import SplitResult, quote, urlsplit
 
 from geniza.config import secure_url
 
@@ -57,6 +66,10 @@ QUERY_PAGE = 4096
 
 #: Bytes read at a time from a download.
 CHUNK = 1 << 20
+
+#: Bytes (by the sizes the server gave) that ``downloads`` fetches ahead
+#: of the one it is waiting for, so its memory stays bounded.
+IN_FLIGHT = 64 << 20
 
 #: Longest server text quoted in an error.
 MAX_DETAIL = 200
@@ -103,12 +116,39 @@ def _short(text: str) -> str:
     return text if len(text) <= MAX_DETAIL else text[: MAX_DETAIL - 1] + "…"
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Turn a redirect into an ``HTTPError``, so the token is not sent to a
-    URL the configuration or session did not name."""
+class _Pool:
+    """Idle connections by origin, kept for reuse. Thread-safe; each
+    connection is used by one thread at a time."""
 
-    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
-        return None
+    def __init__(self, timeout: float) -> None:
+        self._timeout = timeout
+        self._context = ssl.create_default_context()
+        self._lock = threading.Lock()
+        self._idle: dict[tuple[str, str], list[http.client.HTTPConnection]] = {}
+
+    def take(self, url: SplitResult) -> tuple[http.client.HTTPConnection, bool]:
+        """An idle connection to the origin of ``url``, or a new one; and
+        whether it was used before."""
+        with self._lock:
+            idle = self._idle.get((url.scheme, url.netloc))
+            if idle:
+                return idle.pop(), True
+        if url.scheme == "https":
+            return http.client.HTTPSConnection(
+                url.netloc, timeout=self._timeout, context=self._context
+            ), False
+        return http.client.HTTPConnection(url.netloc, timeout=self._timeout), False
+
+    def give(self, url: SplitResult, conn: http.client.HTTPConnection) -> None:
+        with self._lock:
+            self._idle.setdefault((url.scheme, url.netloc), []).append(conn)
+
+    def close(self) -> None:
+        with self._lock:
+            idle, self._idle = self._idle, {}
+        for conns in idle.values():
+            for conn in conns:
+                conn.close()
 
 
 @dataclass(frozen=True)
@@ -183,7 +223,7 @@ class Changes:
 
 
 class Client:
-    """A connection to one JMAP account. Not thread-safe."""
+    """A connection to one JMAP account. Thread-safe."""
 
     session: Session
 
@@ -195,9 +235,8 @@ class Client:
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._token = token
-        self._timeout = timeout
         self._sleep = sleep
-        self._opener = urllib.request.build_opener(_NoRedirect)
+        self._pool = _Pool(timeout)
 
     def __repr__(self) -> str:
         return f"Client(account={self.session.account_id!r})"
@@ -216,63 +255,117 @@ class Client:
         if not secure_url(url):
             raise JmapError(f"insecure URL {url!r}")
         client = cls(token, timeout=timeout, sleep=sleep)
-        client.session = Session.parse(client._json(client._open(url)))
+        try:
+            client.session = Session.parse(client._json(url))
+        except BaseException:
+            client.close()
+            raise
         return client
+
+    def close(self) -> None:
+        """Close the idle connections."""
+        self._pool.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     # --- HTTP -------------------------------------------------------------
 
-    def _open(self, url: str, body: bytes | None = None) -> Any:
-        request = urllib.request.Request(url, data=body)
-        request.add_header("Authorization", f"Bearer {self._token}")
-        request.add_header("Accept", "application/json")
+    @contextmanager
+    def _open(
+        self, url: str, body: bytes | None = None
+    ) -> Iterator[http.client.HTTPResponse]:
+        """A successful (2xx) response to a GET, or to a POST of ``body``,
+        with transient statuses retried. Its connection goes back to the
+        pool if the response is read to the end."""
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https"):
+            raise JmapError(f"{url}: not an http URL")
+        target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "Accept": "application/json",
+        }
         if body is not None:
-            request.add_header("Content-Type", "application/json")
+            headers["Content-Type"] = "application/json"
         backoff = BACKOFF
         for attempt in range(RETRIES + 1):
+            conn, response = self._send(url, parts, target, body, headers)
+            if 200 <= response.status < 300:
+                break
             try:
-                return self._opener.open(request, timeout=self._timeout)
-            except urllib.error.HTTPError as e:
-                if e.code not in TRANSIENT or attempt == RETRIES:
-                    raise self._http_error(url, e) from None
-                wait = _retry_after(e.headers.get("Retry-After"))
-                e.close()
-                if wait is None:
-                    wait, backoff = backoff, backoff * 2
-                elif wait > MAX_WAIT:
-                    raise JmapError(
-                        f"{url}: HTTP {e.code}, retry after {wait:.0f} s;"
-                        " not waiting that long"
-                    ) from None
-                self._sleep(wait)
-            except (urllib.error.URLError, OSError) as e:
-                reason = getattr(e, "reason", e)
-                raise JmapError(f"{url}: {reason}") from None
-        raise AssertionError("unreachable")
+                if response.status not in TRANSIENT or attempt == RETRIES:
+                    raise self._http_error(url, response)
+                wait = _retry_after(response.getheader("Retry-After"))
+            finally:
+                conn.close()
+            if wait is None:
+                wait, backoff = backoff, backoff * 2
+            elif wait > MAX_WAIT:
+                raise JmapError(
+                    f"{url}: HTTP {response.status}, retry after {wait:.0f} s;"
+                    " not waiting that long"
+                )
+            self._sleep(wait)
+        try:
+            yield response
+        except BaseException:
+            conn.close()
+            raise
+        if response.isclosed() and not response.will_close:
+            self._pool.give(parts, conn)
+        else:
+            conn.close()
+
+    def _send(
+        self,
+        url: str,
+        parts: SplitResult,
+        target: str,
+        body: bytes | None,
+        headers: dict[str, str],
+    ) -> tuple[http.client.HTTPConnection, http.client.HTTPResponse]:
+        """Send a request; a connection the server closed while it was idle
+        is replaced by a new one (every request only reads, so sending one
+        twice is harmless)."""
+        while True:
+            conn, reused = self._pool.take(parts)
+            try:
+                conn.request("GET" if body is None else "POST", target, body, headers)
+                return conn, conn.getresponse()
+            except (http.client.HTTPException, OSError) as e:
+                conn.close()
+                if reused and isinstance(e, ConnectionError):
+                    continue
+                raise JmapError(f"{url}: {str(e) or type(e).__name__}") from None
 
     @staticmethod
-    def _http_error(url: str, e: urllib.error.HTTPError) -> JmapError:
-        if 300 <= e.code < 400:
-            target = e.headers.get("Location", "?")
+    def _http_error(url: str, response: http.client.HTTPResponse) -> JmapError:
+        code = response.status
+        if 300 <= code < 400:
+            target = response.getheader("Location", "?")
             return JmapError(f"{url}: redirected to {target!r}; not followed")
-        if e.code in (401, 403):
-            return JmapError(f"{url}: HTTP {e.code}, authentication failed")
+        if code in (401, 403):
+            return JmapError(f"{url}: HTTP {code}, authentication failed")
         detail = ""
         try:
-            problem = json.loads(e.read(1 << 16))
+            problem = json.loads(response.read(1 << 16))
             if isinstance(problem, dict):
                 parts = [problem.get("type"), problem.get("detail")]
                 detail = ": " + _short(" ".join(p for p in parts if isinstance(p, str)))
-        except OSError, ValueError:
+        except http.client.HTTPException, OSError, ValueError:
             pass
-        return JmapError(f"{url}: HTTP {e.code}{detail}")
+        return JmapError(f"{url}: HTTP {code}{detail}")
 
-    @staticmethod
-    def _json(response: Any) -> Any:
-        with response:
+    def _json(self, url: str, body: bytes | None = None) -> Any:
+        with self._open(url, body) as response:
             try:
                 return json.loads(response.read())
-            except (OSError, ValueError) as e:
-                raise JmapError(f"{response.url}: bad JSON reply ({e})") from None
+            except (http.client.HTTPException, OSError, ValueError) as e:
+                raise JmapError(f"{url}: bad JSON reply ({e})") from None
 
     # --- method calls -----------------------------------------------------
 
@@ -294,7 +387,7 @@ class Client:
             "using": sorted(using),
             "methodCalls": [[m, args, str(i)] for i, (m, args) in enumerate(calls)],
         }
-        reply = self._json(self._open(self.session.api_url, json.dumps(body).encode()))
+        reply = self._json(self.session.api_url, json.dumps(body).encode())
         try:
             responses = reply["methodResponses"]
             by_id = {r[2]: (r[0], r[1]) for r in responses}
@@ -451,9 +544,41 @@ class Client:
             try:
                 while chunk := response.read(CHUNK):
                     chunks.append(chunk)
-            except OSError as e:
+            except (http.client.HTTPException, OSError) as e:
                 raise JmapError(f"download of {blob_id}: {e}") from None
         return b"".join(chunks)
+
+    def downloads(
+        self, blobs: Iterable[tuple[str, int]], *, connections: int
+    ) -> Generator[bytes | JmapError]:
+        """Download emails given as ``(blobId, size)``, up to
+        ``connections`` at a time, yielding in order each one's bytes or the
+        error that stopped it. Downloads run ahead of the one yielded next
+        by up to ``IN_FLIGHT`` bytes of the given sizes. Closing the
+        iterator early cancels those not started."""
+        pool = ThreadPoolExecutor(connections, thread_name_prefix="jmap-download")
+        pending: deque[tuple[int, Future[bytes]]] = deque()
+        ahead = 0
+        items = iter(blobs)
+        try:
+            item = next(items, None)
+            while item is not None or pending:
+                while item is not None and (
+                    not pending or ahead + item[1] <= IN_FLIGHT
+                ):
+                    blob_id, size = item
+                    pending.append((size, pool.submit(self.download, blob_id)))
+                    ahead += size
+                    item = next(items, None)
+                size, future = pending.popleft()
+                ahead -= size
+                try:
+                    data: bytes | JmapError = future.result()
+                except JmapError as e:
+                    data = e
+                yield data
+        finally:
+            pool.shutdown(cancel_futures=True)
 
 
 def _retry_after(value: str | None) -> float | None:
