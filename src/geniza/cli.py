@@ -3,7 +3,8 @@
 Output conventions, shared by every command:
 
 - results go to stdout, as a plain-text summary by default or as JSON with
-  ``--json``;
+  ``--json``; counts and sizes in the text have thousands separators
+  (``1,234,567``), JSON has plain numbers;
 - diagnostics and warnings go through :mod:`logging` to stderr; ``-v`` and
   ``-q`` adjust the level. Addresses and subjects may appear at ``-v`` but
   never at the default level.

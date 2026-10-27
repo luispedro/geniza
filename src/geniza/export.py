@@ -94,9 +94,9 @@ def run(args: argparse.Namespace, out: Output) -> int:
     except SegmentError as e:
         log.error("%s", e)
         return 1
-    summary = f"exported {messages} messages ({size} bytes)"
+    summary = f"exported {messages:,} messages ({size:,} bytes)"
     if errors:
-        summary += f"; {errors} could not be rebuilt"
+        summary += f"; {errors:,} could not be rebuilt"
     if str(target) == "-":
         log.info("%s", summary)
     else:

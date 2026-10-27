@@ -236,15 +236,15 @@ class Report:
         p, a = self.progress, self.applied
         listing = "full listing, " if p.full else ""
         lines = [
-            f"{self.account}: {listing}{p.mailboxes} mailbox changes,"
-            f" {p.emails} emails changed, {p.downloaded} downloaded"
-            f" ({p.bytes} bytes): {p.stored} stored, {p.held} held;"
-            f" {p.settings} setting changes; {p.events} events"
+            f"{self.account}: {listing}{p.mailboxes:,} mailbox changes,"
+            f" {p.emails:,} emails changed, {p.downloaded:,} downloaded"
+            f" ({p.bytes:,} bytes): {p.stored:,} stored, {p.held:,} held;"
+            f" {p.settings:,} setting changes; {p.events:,} events"
         ]
         if a is not None:
             lines.append(
-                f"  incoming: {a.promoted} promoted, {a.dropped} dropped,"
-                f" {a.undropped} undropped, {a.purged} purged"
+                f"  incoming: {a.promoted:,} promoted, {a.dropped:,} dropped,"
+                f" {a.undropped:,} undropped, {a.purged:,} purged"
             )
         if self.guard:
             lines.append(f"  not dropped: {self.guard}; see --allow-mass-drop")

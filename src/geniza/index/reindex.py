@@ -73,12 +73,12 @@ class Report:
 
     def text(self) -> str:
         lines = [
-            f"messages: {self.messages} ({self.records} records,"
-            f" {self.incoming} files in incoming/)",
-            f"attachment files: {self.attachments}",
-            f"accounts: {self.accounts}",
-            f"message texts read: {self.bodies}",
-            f"problems: {len(self.problems)}",
+            f"messages: {self.messages:,} ({self.records:,} records,"
+            f" {self.incoming:,} files in incoming/)",
+            f"attachment files: {self.attachments:,}",
+            f"accounts: {self.accounts:,}",
+            f"message texts read: {self.bodies:,}",
+            f"problems: {len(self.problems):,}",
         ]
         lines += [f"  {p}" for p in self.problems]
         return "\n".join(lines) + "\n"

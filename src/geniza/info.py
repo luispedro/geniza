@@ -55,9 +55,9 @@ class AccountInfo:
             line = f"{self.name}: never synced"
         else:
             line = (
-                f"{self.name}: {self.messages} messages in {self.mailboxes}"
-                f" mailboxes, {self.held} held, {self.dropped} dropped,"
-                f" {self.journal_events} journal events, last complete sync "
+                f"{self.name}: {self.messages:,} messages in {self.mailboxes:,}"
+                f" mailboxes, {self.held:,} held, {self.dropped:,} dropped,"
+                f" {self.journal_events:,} journal events, last complete sync "
                 + (self.last_sync or "never")
             )
         return line if self.configured else f"{line} (not in the configuration)"
@@ -124,19 +124,20 @@ class Info:
                 if self.initialized
                 else "still initializing"
             ),
-            f"messages: {self.messages} ({self.bytes} bytes as received;"
-            f" {self.in_segments} in segments, {self.in_incoming} only in"
-            f" incoming/, {self.dropped} of them dropped)",
+            f"messages: {self.messages:,} ({self.bytes:,} bytes as received;"
+            f" {self.in_segments:,} in segments, {self.in_incoming:,} only in"
+            f" incoming/, {self.dropped:,} of them dropped)",
         ]
         if self.oldest is not None:
             lines.append(f"received: {self.oldest} to {self.newest}")
         lines += [
-            f"segments: {self.segments} ({self.segment_bytes} bytes)",
-            f"attachment files: {self.attachment_files}"
-            f" ({self.attachment_bytes} bytes; {self.attachments} attachments,"
-            f" {self.decorations} decorations)",
-            f"text indexed for search: {self.text_read} of {self.messages} messages",
-            f"accounts: {len(self.accounts)}",
+            f"segments: {self.segments:,} ({self.segment_bytes:,} bytes)",
+            f"attachment files: {self.attachment_files:,}"
+            f" ({self.attachment_bytes:,} bytes; {self.attachments:,} attachments,"
+            f" {self.decorations:,} decorations)",
+            f"text indexed for search: {self.text_read:,} of {self.messages:,}"
+            " messages",
+            f"accounts: {len(self.accounts):,}",
         ]
         lines += [f"  {a.text()}" for a in self.accounts]
         return "\n".join(lines) + "\n"

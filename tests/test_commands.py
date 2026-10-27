@@ -434,7 +434,7 @@ def test_show_held(config: Path, capsysbinary: pytest.CaptureFixture[bytes]) -> 
     out = capsysbinary.readouterr().out.decode()
     assert out.startswith(
         f"id: {id}\nheld: incoming/a/{id[7:]}.eml\n"
-        f"received: 2026-10-01T12:00:00Z\nsize: {len(data)} bytes\n"
+        f"received: 2026-10-01T12:00:00Z\nsize: {len(data):,} bytes\n"
     )
     assert "record:" not in out
     # A's file holds another message: b's is read instead.

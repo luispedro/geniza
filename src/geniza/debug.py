@@ -211,15 +211,15 @@ def import_local(args: argparse.Namespace, out: Output) -> int:
     report = {"messages": counts["messages"], "bytes": size, "store_bytes": stored}
     report |= {k: v for k, v in sorted(counts.items()) if k != "messages"}
     lines = [
-        f"{counts['messages']} messages ({size} bytes):"
-        f" {counts['new']} new, {counts['already stored']} already stored",
-        f"store: {stored} bytes in segments and attachment files",
+        f"{counts['messages']:,} messages ({size:,} bytes):"
+        f" {counts['new']:,} new, {counts['already stored']:,} already stored",
+        f"store: {stored:,} bytes in segments and attachment files",
     ]
     parts = {k: v for k, v in sorted(counts.items()) if k.endswith(tuple(Mode))}
     if parts:
-        lines.append("parts: " + ", ".join(f"{v} {k}" for k, v in parts.items()))
+        lines.append("parts: " + ", ".join(f"{v:,} {k}" for k, v in parts.items()))
     for key in ("fallbacks", "read errors"):
         if counts[key]:
-            lines.append(f"{key}: {counts[key]}")
+            lines.append(f"{key}: {counts[key]:,}")
     out.result("\n".join(lines), report)
     return 1 if counts["read errors"] else 0

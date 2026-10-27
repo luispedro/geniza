@@ -377,22 +377,22 @@ class Totals:
 def _text_report(r: dict[str, Any]) -> str:
     h = _human
     lines = [
-        f"messages: {r['messages']} ({h(r['bytes'])}); "
-        f"unique: {r['unique_messages']} ({h(r['unique_bytes'])})",
-        f"without Message-ID: {r['no_message_id']}; "
-        f"Message-IDs shared by different messages: {r['duplicate_message_ids']}",
-        f"messages with parse defects: {r['with_defects']}",
+        f"messages: {r['messages']:,} ({h(r['bytes'])}); "
+        f"unique: {r['unique_messages']:,} ({h(r['unique_bytes'])})",
+        f"without Message-ID: {r['no_message_id']:,}; "
+        f"Message-IDs shared by different messages: {r['duplicate_message_ids']:,}",
+        f"messages with parse defects: {r['with_defects']:,}",
     ]
     if r["read_errors"]:
-        lines.append(f"unreadable files: {r['read_errors']}")
+        lines.append(f"unreadable files: {r['read_errors']:,}")
     for name, n in r["defects"].items():
-        lines.append(f"  {name}: {n}")
+        lines.append(f"  {name}: {n:,}")
     lines.append("")
     lines.append("parts (unique messages):")
     lines.append(f"  {'class':<11} {'count':>9} {'encoded':>10} {'decoded':>10}")
     for c, s in r["classes"].items():
         lines.append(
-            f"  {c:<11} {s['count']:>9} {h(s['encoded_bytes']):>10} "
+            f"  {c:<11} {s['count']:>9,} {h(s['encoded_bytes']):>10} "
             f"{h(s['decoded_bytes']):>10}"
         )
     lines.append("")
@@ -401,27 +401,28 @@ def _text_report(r: dict[str, Any]) -> str:
     lines.append(f"  {'class':<11} " + " ".join(f"{b:>8}" for b in buckets))
     for c, s in r["classes"].items():
         lines.append(
-            f"  {c:<11} " + " ".join(f"{s['histogram'][b]:>8}" for b in buckets)
+            f"  {c:<11} " + " ".join(f"{s['histogram'][b]:>8,}" for b in buckets)
         )
     lines.append("")
     a, d = r["attachments"], r["decorations"]
     for c in ("attachment", "decoration"):
         s = r["classes"][c]
-        modes = ", ".join(f"{k} {v}" for k, v in s["modes"].items()) or "none"
+        modes = ", ".join(f"{k} {v:,}" for k, v in s["modes"].items()) or "none"
         lines.append(f"{c}s: {modes}")
         for reason, n in s["reasons"].items():
-            lines.append(f"  {reason}: {n}")
-        types = ", ".join(f"{k} {v}" for k, v in s["top_content_types"].items())
+            lines.append(f"  {reason}: {n:,}")
+        types = ", ".join(f"{k} {v:,}" for k, v in s["top_content_types"].items())
         lines.append(f"  types: {types}")
         if c == "attachment":
             lines.append(
-                f"  files: {a['unique_blobs']} unique of {a['occurrences']} extracted"
+                f"  files: {a['unique_blobs']:,} unique"
+                f" of {a['occurrences']:,} extracted"
             )
     lines.append(
-        f"  with a filename: {d['with_filename']}; "
-        f"stubbable: {d['unique_blobs']} unique of {d['stubbable_occurrences']}"
+        f"  with a filename: {d['with_filename']:,}; "
+        f"stubbable: {d['unique_blobs']:,} unique of {d['stubbable_occurrences']:,}"
     )
-    rep = ", ".join(f"{k}x: {v}" for k, v in d["repeat_histogram"].items())
+    rep = ", ".join(f"{k}x: {v:,}" for k, v in d["repeat_histogram"].items())
     lines.append(f"  identical decorations, blobs by repeat count: {rep or 'none'}")
     lines.append(f"  bytes saved by deduplicating them: {h(d['bytes_saved_by_dedup'])}")
     lines.append("")
@@ -432,8 +433,8 @@ def _text_report(r: dict[str, Any]) -> str:
     )
     for t in r["thresholds"]:
         lines.append(
-            f"  {h(t['decoration_min_size']):>9} {t['files']:>8} "
-            f"{h(t['file_bytes']):>11} {t['decoration_files']:>7} "
+            f"  {h(t['decoration_min_size']):>9} {t['files']:>8,} "
+            f"{h(t['file_bytes']):>11} {t['decoration_files']:>7,} "
             f"{h(t['inline_bytes']):>13}"
         )
     return "\n".join(lines) + "\n"

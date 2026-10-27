@@ -167,15 +167,15 @@ def text(info: dict[str, Any]) -> str:
             f"record: {info['segment']} at {info['offset']}",
             f"received: {info['received']}",
             f"stored: {info['stored']}",
-            f"size: {info['size']} bytes"
-            f" ({info['stripped_size']} stored in the record)",
+            f"size: {info['size']:,} bytes"
+            f" ({info['stripped_size']:,} stored in the record)",
         ]
     else:
         dropped = " (dropped)" if info["state"] == "dropped" else ""
         lines += [
             f"held: {info['file']}{dropped}",
             f"received: {info['received']}",
-            f"size: {info['size']} bytes",
+            f"size: {info['size']:,} bytes",
         ]
     for name, values in info["headers"].items():
         lines += [f"{name}: {v}" for v in values]
