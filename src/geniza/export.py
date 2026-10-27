@@ -63,6 +63,8 @@ def write_mbox(store: Path, out: BinaryIO | io.BufferedIOBase) -> tuple[int, int
         out.write(from_line(header.received) + escape(data) + b"\n")
         messages += 1
         size += len(data)
+        if messages % 10000 == 0:
+            log.info("%d messages", messages)
     return messages, size, errors
 
 

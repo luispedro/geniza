@@ -13,6 +13,7 @@ keeps its headers, so neither the text nor the attachments' types and
 names need the attachment files.
 """
 
+import logging
 import sqlite3
 from contextlib import suppress
 from pathlib import Path
@@ -25,8 +26,12 @@ from geniza.store import incoming, segment
 from geniza.store.parts import PartRecord, parse_parts
 from geniza.store.segment import SegmentError
 
+log = logging.getLogger(__name__)
+
 #: Messages read per transaction.
 BATCH = 200
+#: Messages read between progress lines (at ``-v``); a multiple of ``BATCH``.
+PROGRESS = 10000
 #: Most characters of text indexed per message (that of its attached
 #: messages included); the rest is not searchable.
 MAX_TEXT = 1024 * 1024
@@ -50,6 +55,8 @@ def read_bodies(store: Path, conn: sqlite3.Connection, problems: list[str]) -> i
         n += len(rows)
         if len(rows) < BATCH:
             return n
+        if n % PROGRESS == 0:
+            log.info("index: %d message texts", n)
 
 
 def _read(

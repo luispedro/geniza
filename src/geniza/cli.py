@@ -6,8 +6,11 @@ Output conventions, shared by every command:
   ``--json``; counts and sizes in the text have thousands separators
   (``1,234,567``), JSON has plain numbers;
 - diagnostics and warnings go through :mod:`logging` to stderr; ``-v`` and
-  ``-q`` adjust the level. Addresses and subjects may appear at ``-v`` but
-  never at the default level.
+  ``-q`` adjust the level. ``-v`` adds what each step found and how long it
+  took, and progress through long passes; ``-vv`` adds a line per item
+  (mailbox, email, request, segment), each prefixed with the milliseconds
+  since the start. Addresses and subjects may appear at ``-v`` but never at the
+  default level.
 """
 
 import argparse
@@ -116,7 +119,10 @@ def _setup_logging(verbosity: int) -> None:
         verbosity, logging.DEBUG if verbosity > 1 else logging.ERROR
     )
     handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+    fmt = "%(levelname)s: %(message)s"
+    if level <= logging.DEBUG:
+        fmt = "%(relativeCreated)9.0f ms " + fmt
+    handler.setFormatter(logging.Formatter(fmt))
     root = logging.getLogger("geniza")
     root.handlers[:] = [handler]
     root.setLevel(level)

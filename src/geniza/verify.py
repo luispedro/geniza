@@ -225,6 +225,7 @@ def verify(store: Path) -> Report:
     for path in segment.segments(store):
         offsets = []
         name = path.relative_to(store).as_posix()
+        log.debug("%s", name)
         try:
             for offset, header in segment.scan(path):
                 offsets.append(offset)
@@ -238,6 +239,7 @@ def verify(store: Path) -> Report:
             if report.records % 10000 == 0:
                 log.info("%d records", report.records)
     report.messages = len(ids)
+    log.info("%d records read; checking attachment files", report.records)
     for prefix, file in attachments.scan(store):
         report.attachment_files += 1
         referenced = file in files.hashes
@@ -250,12 +252,14 @@ def verify(store: Path) -> Report:
             report.problems.append(f"{file}: content does not match its name")
         elif not referenced:
             report.orphans.append(file)
+    log.info("%d attachment files hashed; checking incoming/", report.attachment_files)
     held = _check_incoming(store, ids, report)
     state = store / "state"
     accounts = (
         sorted(p.name for p in state.iterdir() if p.is_dir()) if state.is_dir() else []
     )
     for account in accounts:
+        log.info("replaying the journal of %s", account)
         report.accounts += 1
         replayed = State()
         try:

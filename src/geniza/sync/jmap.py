@@ -25,10 +25,14 @@ one twice is harmless.
 
 JMAP objects are returned as the server sent them (``dict``s of JSON
 values), since the journal keeps unknown properties verbatim.
+
+Retries are logged at ``-v``; method calls with their time, and new
+connections, at ``-vv``.
 """
 
 import http.client
 import json
+import logging
 import ssl
 import threading
 import time
@@ -43,6 +47,8 @@ from typing import Any, Self
 from urllib.parse import SplitResult, quote, urlsplit
 
 from geniza.config import secure_url
+
+log = logging.getLogger(__name__)
 
 CORE = "urn:ietf:params:jmap:core"
 MAIL = "urn:ietf:params:jmap:mail"
@@ -133,6 +139,7 @@ class _Pool:
             idle = self._idle.get((url.scheme, url.netloc))
             if idle:
                 return idle.pop(), True
+        log.debug("connecting to %s", url.netloc)
         if url.scheme == "https":
             return http.client.HTTPSConnection(
                 url.netloc, timeout=self._timeout, context=self._context
@@ -309,6 +316,10 @@ class Client:
                     f"{url}: HTTP {response.status}, retry after {wait:.0f} s;"
                     " not waiting that long"
                 )
+            log.info(
+                "%s: HTTP %d; trying again in %.1f s (%d of %d)",
+                url, response.status, wait, attempt + 1, RETRIES,
+            )  # fmt: skip
             self._sleep(wait)
         try:
             yield response
@@ -387,7 +398,12 @@ class Client:
             "using": sorted(using),
             "methodCalls": [[m, args, str(i)] for i, (m, args) in enumerate(calls)],
         }
+        start = time.monotonic()
         reply = self._json(self.session.api_url, json.dumps(body).encode())
+        log.debug(
+            "%s: %.2f s",
+            ", ".join(m for m, _ in calls), time.monotonic() - start,
+        )  # fmt: skip
         try:
             responses = reply["methodResponses"]
             by_id = {r[2]: (r[0], r[1]) for r in responses}

@@ -634,6 +634,42 @@ def test_cli(env: Env, capsys: pytest.CaptureFixture[str]) -> None:
     assert "no account 'other'" in capsys.readouterr().err
 
 
+def test_verbose(env: Env, capsys: pytest.CaptureFixture[str]) -> None:
+    env.fake.add_email(message(1), {env.inbox}, received=OLD)
+    config = env.root / "config.toml"
+    config.write_text(
+        f'[stores.s]\npath = "{env.store}"\ncache = "{env.root / "cache"}"\n'
+        f'[accounts.acct]\nstore = "s"\ntype = "jmap"\nurl = "{env.fake.url}"\n'
+        f'token_command = "printf %s {TOKEN}"\n'
+    )
+    try:
+        assert cli.main(["--config", str(config), "-v", "sync"]) == 0
+        err = capsys.readouterr().err
+        print(err)
+        assert f"acct: connecting to {env.fake.url}" in err
+        assert "acct: no cursors from a previous run; listing all" in err
+        assert "acct: 3 mailboxes listed, 0 gone" in err
+        assert "acct: 1 emails listed" in err
+        assert "acct: 1 of 1 emails, 1 downloaded" in err
+        assert "acct: incoming/: nothing to do" in err
+        assert "DEBUG" not in err
+        id_ = env.fake.add_email(message(2), {env.inbox}, received=NOW)
+        assert cli.main(["--config", str(config), "-vv", "sync"]) == 0
+        err = capsys.readouterr().err
+        print(err)
+        assert "acct: 1 emails changed, 0 destroyed since the last run" in err
+        assert "Email/get: " in err
+        assert "acct: batch 1 of 1" in err
+        assert f"acct: email {id_}: " in err
+        # No addresses or subjects, even at -vv.
+        assert "example" not in err.replace(env.fake.url, "")
+        # The default level says nothing when all is well.
+        assert cli.main(["--config", str(config), "sync"]) == 0
+        assert capsys.readouterr().err == ""
+    finally:
+        cli._setup_logging(0)
+
+
 def test_info(env: Env, capsys: pytest.CaptureFixture[str]) -> None:
     env.fake.add_email(message(1), {env.inbox, env.archive}, received=OLD)
     env.fake.add_email(message(2), {env.inbox}, received=NOW - DAY)

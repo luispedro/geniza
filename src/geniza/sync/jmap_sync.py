@@ -24,9 +24,14 @@ the run incomplete, since no cursor depends on them.
 
 The caller holds the store lock, evaluates ``incoming/`` after a complete
 run and writes the returned cursors to ``sync.json``.
+
+At ``-v`` a run logs what each step found and, every ``PROGRESS_EVERY``
+seconds, how far the emails are; at ``-vv`` also each mailbox event, batch
+and download.
 """
 
 import logging
+import time
 from collections.abc import Collection, Iterable, Iterator, Sequence
 from contextlib import closing
 from dataclasses import dataclass, field
@@ -70,6 +75,8 @@ EMAIL_PROPERTIES = (
 BATCH = 256
 #: Setting types journaled, each when the session has its capability.
 SETTING_TYPES = ("Identity", "SieveScript", "VacationResponse")
+#: Seconds between progress lines (at ``-v``) while emails are synced.
+PROGRESS_EVERY = 10.0
 
 
 @dataclass
@@ -199,11 +206,19 @@ class JmapSync:
                 objects = self.client.get("Mailbox", ids).objects if ids else []
                 self._write(self._mbox_events(objects))
                 gone = [m for m in changes.destroyed if m in self.state.mailboxes]
+                log.info(
+                    "%s: %d mailboxes changed, %d destroyed since the last run",
+                    self.account, len(ids), len(gone),
+                )  # fmt: skip
                 return changes.new_state, gone
         got = self.client.get("Mailbox")
         self._write(self._mbox_events(got.objects))
         listed = {o["id"] for o in got.objects}
-        return got.state, [m for m in self.state.mailboxes if m not in listed]
+        gone = [m for m in self.state.mailboxes if m not in listed]
+        log.info(
+            "%s: %d mailboxes listed, %d gone", self.account, len(listed), len(gone)
+        )
+        return got.state, gone
 
     def _mbox_events(self, objects: Iterable[Json]) -> list[Event]:
         events: list[Event] = []
@@ -216,6 +231,11 @@ class JmapSync:
                 event.name, event.role, event.parent, event.sort, event.subscribed,
                 event.props,
             ):  # fmt: skip
+                log.debug(
+                    "%s: mailbox %s (%s): %s",
+                    self.account, event.mbox, event.name,
+                    "new" if box is None else "changed",
+                )  # fmt: skip
                 events.append(event)
         self.progress.mailboxes += len(events)
         return events
@@ -256,14 +276,27 @@ class JmapSync:
             else:
                 state, ids = changes.new_state, changes.created + changes.updated
                 destroyed = changes.destroyed
+                log.info(
+                    "%s: %d emails changed, %d destroyed since the last run",
+                    self.account, len(ids), len(destroyed),
+                )  # fmt: skip
         if ids is None:
             self.progress.full = True
             state, ids = self.client.query_emails()
+            log.info("%s: %d emails listed", self.account, len(ids))
         seen: set[str] = set()
-        for chunk in batched(ids, BATCH, strict=False):
+        start = reported = time.monotonic()
+        batches = -(-len(ids) // BATCH)
+        for n, chunk in enumerate(batched(ids, BATCH, strict=False), 1):
             objects = self.client.get("Email", chunk, EMAIL_PROPERTIES).objects
             seen.update(_check(o.get("id"), str, "email id") for o in objects)
+            log.debug("%s: batch %d of %d", self.account, n, batches)
             self._batch(objects)
+            if n < batches and time.monotonic() - reported >= PROGRESS_EVERY:
+                reported = time.monotonic()
+                self._log_progress(len(ids), reported - start)
+        if ids:
+            self._log_progress(len(ids), time.monotonic() - start)
         if self.progress.full:
             # Whatever the journal has that the listing does not is gone.
             removed = {rid for rids in self.state.contents.values() for rid in rids}
@@ -271,6 +304,13 @@ class JmapSync:
             # Listed as changed but not found: destroyed meanwhile.
             removed = set(destroyed) | set(ids)
         return state, removed - seen
+
+    def _log_progress(self, total: int, elapsed: float) -> None:
+        p = self.progress
+        log.info(
+            "%s: %d of %d emails, %d downloaded (%d bytes) in %.1f s",
+            self.account, p.emails, total, p.downloaded, p.bytes, elapsed,
+        )  # fmt: skip
 
     def _batch(self, objects: list[Json]) -> None:
         # A mailbox created after the mailboxes were synced.
@@ -281,6 +321,7 @@ class JmapSync:
             if m not in self.state.mailboxes
         }
         if unknown:
+            log.debug("%s: %d mailboxes new since listed", self.account, len(unknown))
             got = self.client.get("Mailbox", sorted(unknown))
             self._write(self._mbox_events(got.objects))
         # Nothing below changes the plans of the other emails of the batch
@@ -403,8 +444,12 @@ class JmapSync:
         except IngestError as e:
             self.progress.problems.append(f"email {rid}: {e}")
             return None
-        if self.progress.downloaded % 1000 == 0:
-            log.info("%s: %d emails downloaded", self.account, self.progress.downloaded)
+        log.debug(
+            "%s: email %s: %d bytes, %s %s (%s)",
+            self.account, rid, len(data), stored.id,
+            "new" if stored.new else "already",
+            "in incoming/" if isinstance(stored, Held) else "in a segment",
+        )  # fmt: skip
         return stored.id
 
     # --- the end ----------------------------------------------------------
@@ -417,6 +462,11 @@ class JmapSync:
             for rid, msg in sorted(rids.items()):
                 if rid in removed or mbox in gone:
                     events.append(Remove(msg=msg, mbox=mbox, rid=rid))
+        if events:
+            log.info("%s: %d removals from mailboxes", self.account, len(events))
+        for m in gone:
+            box = self.state.mailboxes[m]
+            log.debug("%s: mailbox %s (%s): gone", self.account, m, box.name)
         events += [Gone(mbox=m) for m in gone]
         self.progress.mailboxes += len(gone)
         self._write(events)
@@ -432,9 +482,12 @@ class JmapSync:
                 log.info("%s: no %s capability; not synced", self.account, type_)
                 continue
             try:
-                self._write(self._setting_events(type_))
+                events = self._setting_events(type_)
             except JmapError as e:
                 self.progress.setting_problems.append(f"{type_}: {e}")
+                continue
+            log.info("%s: %s: %d changes", self.account, type_, len(events))
+            self._write(events)
 
     def _setting_events(self, type_: str) -> list[Event]:
         events: list[Event] = []

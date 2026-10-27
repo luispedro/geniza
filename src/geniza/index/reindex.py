@@ -18,12 +18,16 @@ small next to the segments.
 record cut short at the end of a segment can be one being written, so it is
 skipped with a warning; other damage is reported as a problem, and the
 records the damage hides are left out.
+
+What a pass read, and how long it took, is logged at ``-v``; each segment
+and account read at ``-vv``.
 """
 
 import argparse
 import logging
 import os
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -124,10 +128,13 @@ def _segments(store: Path, conn: sqlite3.Connection, report: Report) -> None:
     for path in segment.segments(store):
         name = path.relative_to(store).as_posix()
         start = indexed.get(name, 0)
+        before = report.records
         try:
             for offset, header, head, end in segment.scan_heads(path, start):
                 start = end
                 report.records += 1
+                if report.records % 10000 == 0:
+                    log.info("index: %d records", report.records)
                 if isinstance(head, SegmentError):
                     report.problems.append(str(head))
                     continue
@@ -163,6 +170,8 @@ def _segments(store: Path, conn: sqlite3.Connection, report: Report) -> None:
             log.warning("%s (being written?); skipped", e)
         except SegmentError as e:
             report.problems.append(str(e))
+        if report.records > before:
+            log.debug("index: %s: %d records", name, report.records - before)
         conn.execute(
             "INSERT OR REPLACE INTO segments (segment, indexed) VALUES (?, ?)",
             (name, start),
@@ -345,6 +354,10 @@ def _refresh(store: Path, conn: sqlite3.Connection, report: Report) -> None:
         moved = journal != read.get(account)
         if not moved and files.keys() == held.get(account, set()):
             continue
+        log.debug(
+            "index: %s: %s changed; read again",
+            account, "journal" if moved else "incoming/",
+        )  # fmt: skip
         state = _replay(store, account, report) if journal is not None else State()
         if moved:
             for table in ("accounts", "mailboxes", "membership", "flags"):
@@ -411,13 +424,30 @@ def reindex(store: Path, cache: Path) -> Report:
     report = Report()
     conn = _open(store, cache)
     try:
+        start = time.monotonic()
         with schema.transaction(conn):
             _rebuild(store, conn, report)
             _counts(conn, report)
+        _log_headers(report, start)
+        start = time.monotonic()
         report.bodies = bodies.read_bodies(store, conn, report.problems)
+        _log_bodies(report, start)
     finally:
         conn.close()
     return report
+
+
+def _log_headers(report: Report, start: float) -> None:
+    log.info(
+        "index: %d records read in %.1f s", report.records, time.monotonic() - start
+    )
+
+
+def _log_bodies(report: Report, start: float) -> None:
+    log.info(
+        "index: %d message texts read in %.1f s",
+        report.bodies, time.monotonic() - start,
+    )  # fmt: skip
 
 
 def update(store: Path, cache: Path, *, text: bool = False) -> sqlite3.Connection:
@@ -430,8 +460,10 @@ def update(store: Path, cache: Path, *, text: bool = False) -> sqlite3.Connectio
     report = Report()
     conn = _open(store, cache)
     try:
+        start = time.monotonic()
         with schema.transaction(conn):
             if conn.execute("SELECT 1 FROM segments LIMIT 1").fetchone() is None:
+                log.info("index: no segment read yet; building it")
                 _rebuild(store, conn, report)
             elif not _appended_only(store, conn):
                 log.warning("%s: segments changed since indexed; rebuilding", cache)
@@ -439,14 +471,16 @@ def update(store: Path, cache: Path, *, text: bool = False) -> sqlite3.Connectio
             else:
                 _segments(store, conn, report)
                 _refresh(store, conn, report)
+        _log_headers(report, start)
         if text:
+            start = time.monotonic()
             report.bodies = bodies.read_bodies(store, conn, report.problems)
+            _log_bodies(report, start)
     except BaseException:
         conn.close()
         raise
     for problem in report.problems:
         log.warning("%s", problem)
-    log.debug("index: %d records, %d bodies read", report.records, report.bodies)
     return conn
 
 

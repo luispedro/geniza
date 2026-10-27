@@ -25,6 +25,7 @@ import json
 import logging
 import re
 import sqlite3
+import time
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import date
@@ -335,7 +336,9 @@ def run(args: argparse.Namespace, out: Output) -> int:
         except QueryError as e:
             log.error("%s", e)
             return 2
+        start = time.monotonic()
         hits, total = search(conn, query, args.limit or None)
+        log.info("%d messages match (%.2f s)", total, time.monotonic() - start)
     if len(hits) < total:
         log.warning("%d of %d messages shown (see --limit)", len(hits), total)
     out.result(

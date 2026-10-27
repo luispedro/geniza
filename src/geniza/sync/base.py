@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import secrets
+import time
 from collections.abc import Callable, Sequence
 from contextlib import closing
 from dataclasses import dataclass, field
@@ -274,10 +275,16 @@ def sync_account(
     report = Report(account.name)
     path = store.path
     now = clock()
+    start = time.monotonic()
     previous = read_sync(path, account.name)
     try:
         token = resolve_secret(account.token, f"accounts.{account.name}.token")
+        log.info("%s: connecting to %s", account.name, account.url)
         with connect(account.url, token) as client:
+            log.debug(
+                "%s: JMAP account %s, API at %s",
+                account.name, client.session.account_id, client.session.api_url,
+            )  # fmt: skip
             state = journal.replay(path, account.name)
             writer = JournalWriter(path, account.name, clock=clock)
             run = JmapSync(
@@ -287,11 +294,21 @@ def sync_account(
             )  # fmt: skip
             report.progress = run.progress
             cursors = previous.jmap if previous.exclude == account.exclude else {}
+            if not previous.jmap:
+                log.info(
+                    "%s: no cursors from a previous run; listing all", account.name
+                )
+            elif not cursors:
+                log.info("%s: sync.exclude changed; listing all", account.name)
             new = run.run(cursors.get("email_state"), cursors.get("mailbox_state"))
     except (ConfigError, JmapError, JournalError) as e:
         report.error = str(e)
         return report
     if report.progress.problems:
+        log.info(
+            "%s: %d problems; incoming/ not evaluated",
+            account.name, len(report.progress.problems),
+        )  # fmt: skip
         return report
     evaluation = evaluate(
         state,
@@ -303,6 +320,19 @@ def sync_account(
         exclude=account.exclude,
         allow_mass_drop=allow_mass_drop,
     )
+    fates = [
+        f"{n} {what}"
+        for what, n in [
+            ("to promote", len(evaluation.promote)),
+            ("archived", len(evaluation.archived)),
+            ("to drop", len(evaluation.drop)),
+            ("to undrop", len(evaluation.undrop)),
+            ("to purge", len(evaluation.purge)),
+            ("absent", len(evaluation.absent)),
+        ]
+        if n
+    ]
+    log.info("%s: incoming/: %s", account.name, ", ".join(fates) or "nothing to do")
     report.applied = incoming.apply(ing, writer, evaluation)
     report.guard, report.withheld = evaluation.guard, len(evaluation.withheld)
     write_sync(
@@ -316,6 +346,7 @@ def sync_account(
         ),
     )
     report.complete = True
+    log.info("%s: done in %.1f s", account.name, time.monotonic() - start)
     return report
 
 
@@ -336,6 +367,7 @@ def sync_store(
         init_store(store.path)
         with closing(reindex.update(store.path, store.cache)) as conn:
             catalog = reindex.catalog(conn)
+        log.info("%s: %d messages in segments", store.name, len(catalog.messages))
         with Ingester(
             store.path, lock, policy=store.attachments, catalog=catalog, clock=clock
         ) as ing:
