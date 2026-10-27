@@ -57,7 +57,7 @@ def make_config(
 
 
 def connect(url: str, token: str) -> Client:
-    return Client.connect(url, token, timeout=10)
+    return Client.connect(url, token, timeout=10, sleep=lambda _: None)
 
 
 @dataclass
@@ -405,6 +405,18 @@ def test_download_problems_leave_the_run_incomplete(
     assert report.ok and len(fake.downloads) == downloads + 1
     check_journal(env.store, fake)
     assert is_initialized(env.store)
+
+
+def test_network_errors_are_retried(env: Env) -> None:
+    fake = env.fake
+    for i in range(4):
+        fake.add_email(message(i), {env.inbox}, received=OLD)
+    # Every other reply cut short (the second of each pair is whole).
+    fake.cut = [0, 1 << 30] * 50
+    report = env.sync()
+    assert report.ok and report.progress.downloaded == 4
+    assert len(fake.downloads) > 4
+    check_journal(env.store, fake)
 
 
 def test_bad_token(env: Env) -> None:

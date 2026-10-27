@@ -18,10 +18,11 @@ costs round trips for TCP and TLS, and starts slow. ``downloads`` fetches
 blobs over several connections at once, since a far server's latency,
 not its bandwidth, is what limits one download after another.
 
-A request answered with HTTP 429, 502, 503 or 504 is sent again after a
-pause (``Retry-After`` when the server gives one, else a doubling
-backoff), up to ``RETRIES`` times. Every request only reads, so sending
-one twice is harmless.
+A request answered with HTTP 429, 502, 503 or 504, or cut off by a
+network error (a connection refused, reset or timed out, a reply cut
+short), is sent again after a pause (``Retry-After`` when the server
+gives one, else a doubling backoff), up to ``RETRIES`` times. Every
+request only reads, so sending one twice is harmless.
 
 JMAP objects are returned as the server sent them (``dict``s of JSON
 values), since the journal keeps unknown properties verbatim.
@@ -37,9 +38,8 @@ import ssl
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Generator, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -70,9 +70,6 @@ CAPABILITY = {
 #: Ids asked for per ``Email/query`` page; a server may return fewer.
 QUERY_PAGE = 4096
 
-#: Bytes read at a time from a download.
-CHUNK = 1 << 20
-
 #: Bytes (by the sizes the server gave) that ``downloads`` fetches ahead
 #: of the one it is waiting for, so its memory stays bounded.
 IN_FLIGHT = 64 << 20
@@ -84,7 +81,8 @@ MAX_DETAIL = 200
 #: or server that is briefly unavailable.
 TRANSIENT = frozenset({429, 502, 503, 504})
 
-#: Times a request is sent again after a transient status.
+#: Times a request is sent again after a transient status or a network
+#: error.
 RETRIES = 5
 
 #: First pause without ``Retry-After``, in seconds; it doubles each time.
@@ -115,6 +113,15 @@ class MethodError(JmapError):
 class CannotCalculateChanges(MethodError):
     """``*/changes`` cannot go back to the given state; the caller falls
     back to a full listing."""
+
+
+class _Retry(Exception):
+    """A request to send again: what went wrong, and the pause the server
+    asked for (None: back off)."""
+
+    def __init__(self, problem: str, wait: float | None) -> None:
+        self.problem = problem
+        self.wait = wait
 
 
 def _short(text: str) -> str:
@@ -281,13 +288,9 @@ class Client:
 
     # --- HTTP -------------------------------------------------------------
 
-    @contextmanager
-    def _open(
-        self, url: str, body: bytes | None = None
-    ) -> Iterator[http.client.HTTPResponse]:
-        """A successful (2xx) response to a GET, or to a POST of ``body``,
-        with transient statuses retried. Its connection goes back to the
-        pool if the response is read to the end."""
+    def _fetch(self, url: str, body: bytes | None = None) -> bytes:
+        """The body of a successful (2xx) response to a GET, or to a POST
+        of ``body``. Transient statuses and network errors are retried."""
         parts = urlsplit(url)
         if parts.scheme not in ("http", "https"):
             raise JmapError(f"{url}: not an http URL")
@@ -299,49 +302,79 @@ class Client:
         if body is not None:
             headers["Content-Type"] = "application/json"
         backoff = BACKOFF
-        for attempt in range(RETRIES + 1):
-            conn, response = self._send(url, parts, target, body, headers)
-            if 200 <= response.status < 300:
-                break
+        attempt = 0
+        while True:
             try:
-                if response.status not in TRANSIENT or attempt == RETRIES:
-                    raise self._http_error(url, response)
-                wait = _retry_after(response.getheader("Retry-After"))
-            finally:
-                conn.close()
+                return self._attempt(
+                    url, parts, target, body, headers, last=attempt == RETRIES
+                )
+            except _Retry as r:
+                problem, wait = r.problem, r.wait
             if wait is None:
                 wait, backoff = backoff, backoff * 2
-            elif wait > MAX_WAIT:
-                raise JmapError(
-                    f"{url}: HTTP {response.status}, retry after {wait:.0f} s;"
-                    " not waiting that long"
-                )
+            attempt += 1
             log.info(
-                "%s: HTTP %d; trying again in %.1f s (%d of %d)",
-                url, response.status, wait, attempt + 1, RETRIES,
+                "%s: %s; trying again in %.1f s (%d of %d)",
+                url, problem, wait, attempt, RETRIES,
             )  # fmt: skip
             self._sleep(wait)
-        try:
-            yield response
-        except BaseException:
-            conn.close()
-            raise
-        if response.isclosed() and not response.will_close:
-            self._pool.give(parts, conn)
-        else:
-            conn.close()
 
-    def _send(
+    def _attempt(
         self,
         url: str,
         parts: SplitResult,
         target: str,
         body: bytes | None,
         headers: dict[str, str],
+        *,
+        last: bool,
+    ) -> bytes:
+        """Send a request once and read its reply. Raises ``_Retry`` for a
+        transient status or a network error, unless this is the ``last``
+        attempt. The connection goes back to the pool if the reply was
+        read to the end."""
+        try:
+            conn, response = self._send(parts, target, body, headers)
+            if 200 <= response.status < 300:
+                try:
+                    data = response.read()
+                except BaseException:
+                    conn.close()
+                    raise
+                if response.will_close:
+                    conn.close()
+                else:
+                    self._pool.give(parts, conn)
+                return data
+        except (http.client.HTTPException, OSError) as e:
+            problem = str(e) or type(e).__name__
+            # A certificate that does not verify will not verify next time.
+            if last or isinstance(e, ssl.SSLCertVerificationError):
+                raise JmapError(f"{url}: {problem}") from None
+            raise _Retry(problem, None) from None
+        try:
+            if response.status not in TRANSIENT or last:
+                raise self._http_error(url, response)
+            wait = _retry_after(response.getheader("Retry-After"))
+        finally:
+            conn.close()
+        if wait is not None and wait > MAX_WAIT:
+            raise JmapError(
+                f"{url}: HTTP {response.status}, retry after {wait:.0f} s;"
+                " not waiting that long"
+            )
+        raise _Retry(f"HTTP {response.status}", wait)
+
+    def _send(
+        self,
+        parts: SplitResult,
+        target: str,
+        body: bytes | None,
+        headers: dict[str, str],
     ) -> tuple[http.client.HTTPConnection, http.client.HTTPResponse]:
-        """Send a request; a connection the server closed while it was idle
-        is replaced by a new one (every request only reads, so sending one
-        twice is harmless)."""
+        """Send a request and read the reply's status and headers. A kept
+        connection the server closed while it was idle is replaced by a new
+        one at once; other errors are raised (the connection closed)."""
         while True:
             conn, reused = self._pool.take(parts)
             try:
@@ -351,7 +384,7 @@ class Client:
                 conn.close()
                 if reused and isinstance(e, ConnectionError):
                     continue
-                raise JmapError(f"{url}: {str(e) or type(e).__name__}") from None
+                raise
 
     @staticmethod
     def _http_error(url: str, response: http.client.HTTPResponse) -> JmapError:
@@ -372,11 +405,10 @@ class Client:
         return JmapError(f"{url}: HTTP {code}{detail}")
 
     def _json(self, url: str, body: bytes | None = None) -> Any:
-        with self._open(url, body) as response:
-            try:
-                return json.loads(response.read())
-            except (http.client.HTTPException, OSError, ValueError) as e:
-                raise JmapError(f"{url}: bad JSON reply ({e})") from None
+        try:
+            return json.loads(self._fetch(url, body))
+        except ValueError as e:
+            raise JmapError(f"{url}: bad JSON reply ({e})") from None
 
     # --- method calls -----------------------------------------------------
 
@@ -555,14 +587,7 @@ class Client:
             url = url.replace("{" + var + "}", quote(value, safe=""))
         if not secure_url(url):
             raise JmapError(f"insecure download URL {url!r}")
-        chunks = []
-        with self._open(url) as response:
-            try:
-                while chunk := response.read(CHUNK):
-                    chunks.append(chunk)
-            except (http.client.HTTPException, OSError) as e:
-                raise JmapError(f"download of {blob_id}: {e}") from None
-        return b"".join(chunks)
+        return self._fetch(url)
 
     def downloads(
         self, blobs: Iterable[tuple[str, int]], *, connections: int

@@ -1024,11 +1024,16 @@ the `Retry-After` the server gives (seconds or a date), else after 1 s,
 doubling with each pause that had no `Retry-After`. A `Retry-After` of
 more than 5 minutes is an error (it stops the run, as any error does)
 rather than a pause. Since every request only reads, sending one again
-is harmless. A kept connection that the server closed while it was idle
-is replaced by a new one and the request sent on it. Other HTTP errors,
-and network errors, are not retried: the run stops (a failed download
-only leaves the run partial, see [Sync](#sync)), and the next run starts
-from the same cursors.
+is harmless. Network errors are retried the same way, with the same
+count and backoff: a connection refused, reset or timed out, a host
+that does not resolve, or a reply cut short (a download is then fetched
+again from the start). A certificate that does not verify is not
+retried. A kept connection that the server closed while it was idle is
+replaced by a new one and the request sent on it at once, without a
+pause or counting as a retry. Other HTTP errors are not retried, and
+neither is a request whose retries are used up: the run stops (a failed
+download only leaves the run partial, see [Sync](#sync)), and the next
+run starts from the same cursors.
 
 The full listing (first sync, `cannotCalculateChanges`) takes the
 `Email` state first (`Email/get` with no ids), then pages through

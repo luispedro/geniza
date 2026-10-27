@@ -136,6 +136,11 @@ class FakeJmap:
         #: Answers to the next requests, whatever they ask, each taken off
         #: the front: an HTTP status and a ``Retry-After`` value (or None).
         self.busy: list[tuple[int, str | None]] = []
+        #: The next successful (200) responses, each taken off the front,
+        #: are cut off: the connection is closed after the headers and that
+        #: many bytes of the body (if fewer than it has), or (None) before
+        #: anything is sent.
+        self.cut: list[int | None] = []
         #: Close each connection after one response without saying so, as
         #: a server does with a connection left idle too long.
         self.hang_up = False
@@ -446,14 +451,20 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _send(self, code: int, body: bytes, type_: str = "application/json",
               headers: dict[str, str] | None = None) -> None:  # fmt: skip
+        fake = self.server.fake
+        with fake.lock:
+            cut = fake.cut.pop(0) if code == 200 and fake.cut else len(body)
+        if cut is None:
+            self.close_connection = True
+            return
         self.send_response(code)
         self.send_header("Content-Type", type_)
         self.send_header("Content-Length", str(len(body)))
         for k, v in (headers or {}).items():
             self.send_header(k, v)
         self.end_headers()
-        self.wfile.write(body)
-        if self.server.fake.hang_up:
+        self.wfile.write(body[:cut])
+        if fake.hang_up or cut < len(body):
             self.close_connection = True
 
     def do_GET(self) -> None:

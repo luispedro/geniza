@@ -105,8 +105,12 @@ def test_redirect_refused(server: FakeJmap) -> None:
 
 
 def test_unreachable() -> None:
-    with pytest.raises(JmapError):
-        Client.connect("http://127.0.0.1:1/jmap/session", TOKEN, timeout=10)
+    sleeps: list[float] = []
+    with pytest.raises(JmapError, match="refused"):
+        Client.connect(
+            "http://127.0.0.1:1/jmap/session", TOKEN, timeout=10, sleep=sleeps.append
+        )
+    assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0]
 
 
 # --- method calls ------------------------------------------------------------
@@ -423,6 +427,54 @@ def test_no_retry(server: FakeJmap, code: int) -> None:
     with pytest.raises(JmapError, match=f"HTTP {code}"):
         c.get("Mailbox")
     assert sleeps == []
+
+
+def test_retry_network_errors(server: FakeJmap) -> None:
+    box = server.add_mailbox("Inbox")
+    id_ = server.add_email(message(1), {box})
+    blob_id = server.emails[id_].blob_id
+    # The session's connection dropped before an answer, then cut short.
+    server.cut = [None, 10]
+    c, sleeps = connect_sleeping(server)
+    assert c.session.account_id == ACCOUNT
+    assert sleeps == [1.0, 2.0]
+    # A reply cut short after its headers, or within the body.
+    sleeps.clear()
+    server.cut = [0]
+    assert [m["id"] for m in c.get("Mailbox").objects] == [box]
+    server.cut = [5]
+    assert c.download(blob_id) == message(1)
+    assert sleeps == [1.0, 1.0]
+    assert server.methods == ["Mailbox/get"] * 2
+    assert server.downloads == [blob_id] * 2
+
+
+def test_retry_network_errors_and_statuses(server: FakeJmap) -> None:
+    c, sleeps = connect_sleeping(server)
+    # One backoff for both kinds of failure.
+    server.busy = [(503, None), (429, "3")]
+    server.cut = [1, 2]
+    c.get("Mailbox")
+    assert sleeps == [1.0, 3.0, 2.0, 4.0]
+
+
+def test_retry_network_errors_gives_up(server: FakeJmap) -> None:
+    c, sleeps = connect_sleeping(server)
+    server.cut = [1] * (jmap.RETRIES + 1)
+    with pytest.raises(JmapError, match="IncompleteRead"):
+        c.get("Mailbox")
+    assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0]
+    assert server.cut == []
+
+
+def test_downloads_retry_network_errors(server: FakeJmap) -> None:
+    blobs = [message(i) for i in range(8)]
+    wanted = emails(server, blobs)
+    c, sleeps = connect_sleeping(server)
+    server.cut = [3, 1, 0]
+    assert list(c.downloads(wanted, connections=4)) == blobs
+    assert len(sleeps) == 3
+    assert len(server.downloads) == len(blobs) + 3
 
 
 def test_retry_after_values() -> None:

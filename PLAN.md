@@ -31,8 +31,8 @@ design leaves open.
   evaluation, the end of initialization), tested against an in-process
   fake server (`tests/jmapserver.py`), including fault injection of whole
   syncs, and settings (`setting` events for identities, Sieve scripts
-  and the vacation response), retries on rate limiting, and parallel
-  downloads over kept connections. Left:
+  and the vacation response), retries on rate limiting and network
+  errors, and parallel downloads over kept connections. Left:
   extension properties (`props`), and the run against a real Fastmail
   account (see M8). `geniza info` summarizes a store from its index.
 
@@ -508,6 +508,16 @@ serial and in order. The fake server speaks HTTP/1.1 and counts
 connections and concurrent downloads; tests cover reuse, a server that
 hangs up, failures within a parallel batch, the byte bound, closing
 early, and order (a hypothesis property).
+
+Progress: network errors. A long first sync over a far link should not
+die of one dropped connection, so network errors (refused, reset, timed
+out, unresolved, a reply cut short) are retried like transient statuses,
+with the same count and one backoff shared with them; a download cut
+short is fetched again whole, and a certificate that does not verify is
+not retried. The fake server's `cut` knob ends replies early (after the
+headers and some bytes of the body, or before anything); tests cover
+the session, method calls, single and parallel downloads, the shared
+backoff, giving up, and a whole sync with every other reply cut.
 
 ### M9 — IMAP sync (after the first release)
 
