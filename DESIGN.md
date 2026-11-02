@@ -992,9 +992,10 @@ from the session object, never hard-coded.
    objects are left as they are, since the server did not say they are
    gone. A type whose `get` fails, or a script that cannot be downloaded
    or is not UTF-8, is a problem of the settings only (see
-   [Sync](#sync)); a script left out is tried again next run. Which of
-   these Fastmail offers, and to which token scopes, is to be checked in
-   M8.
+   [Sync](#sync)); a script left out is tried again next run. A
+   read-only Fastmail mail token offers none of the three capabilities,
+   so with one no settings are archived; whether a token with more
+   scopes offers them has not been checked.
 
 The account synced is the session's primary mail account. The token is
 sent only to https URLs (http only to loopback, as for `url`), including

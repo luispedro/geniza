@@ -24,17 +24,17 @@ design leaves open.
   tested against a fake source, `verify` checks `incoming/` and the
   journals against the store, and `show` prints messages only in
   `incoming/` (see M7).
-- **M8 in progress.** Secrets are done (`sshcrypt.py`, `resolve_secret`,
-  `geniza secret keys|encrypt|check`), and so are the JMAP client
-  (`sync/jmap.py`) and `geniza sync` (`sync/base.py`, `sync/jmap_sync.py`:
-  mailboxes and emails into the journal, downloads, `sync.json`,
-  evaluation, the end of initialization), tested against an in-process
-  fake server (`tests/jmapserver.py`), including fault injection of whole
-  syncs, and settings (`setting` events for identities, Sieve scripts
-  and the vacation response), retries on rate limiting and network
-  errors, and parallel downloads over kept connections. Left:
-  extension properties (`props`), and the run against a real Fastmail
-  account (see M8). `geniza info` summarizes a store from its index.
+- **M8 done.** Secrets (`sshcrypt.py`, `resolve_secret`,
+  `geniza secret keys|encrypt|check`), the JMAP client (`sync/jmap.py`)
+  and `geniza sync` (`sync/base.py`, `sync/jmap_sync.py`: mailboxes and
+  emails into the journal, downloads, `sync.json`, evaluation, the end of
+  initialization) work, tested against an in-process fake server
+  (`tests/jmapserver.py`), including fault injection of whole syncs,
+  settings (`setting` events for identities, Sieve scripts and the
+  vacation response), retries on rate limiting and network errors, and
+  parallel downloads over kept connections. The "done when" holds on a
+  real Fastmail account (see M8, "the real run"). `geniza info`
+  summarizes a store from its index. Next: M10.
 
 ## Tooling
 
@@ -518,6 +518,26 @@ not retried. The fake server's `cut` knob ends replies early (after the
 headers and some bytes of the body, or before anything); tests cover
 the session, method calls, single and parallel downloads, the shared
 backoff, giving up, and a whole sync with every other reply cut.
+
+Progress: the real run. A probe of a real Fastmail account with a
+read-only token found that `size` equals the downloaded length, a
+garbage state gives `cannotCalculateChanges` for both `Email` and
+`Mailbox`, no request was rate limited, and non-standard mailbox roles
+occur. It also found no extension properties to journal: `Mailbox` has
+only the standard ones, and `Email/get` rejects unknown properties
+(`invalidArguments`), so `props` stays limited to the standard
+non-derived properties. The read-only token offers no
+identity, Sieve or vacation-response capability, so its settings are
+not archived; a token with those scopes would journal them with no code
+change. The first sync of the whole account then completed over several
+interrupted runs (one of them through an overnight suspend), and
+`verify` found no problems. The next sync downloaded only mail that
+arrived after the first one took its listing (picked up through
+`Email/changes`), one after that with no changes on the server wrote
+nothing but `sync.json`, and a sync after messages were moved between
+mailboxes and their keywords changed journaled `add`/`remove` and
+`flags` events under the same ids and hashes, downloading nothing but
+newly arrived mail; `verify` stayed clean throughout.
 
 ### M9 — IMAP sync (after the first release)
 
