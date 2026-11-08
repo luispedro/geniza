@@ -34,7 +34,10 @@ design leaves open.
   vacation response), retries on rate limiting and network errors, and
   parallel downloads over kept connections. The "done when" holds on a
   real Fastmail account (see M8, "the real run"). `geniza info`
-  summarizes a store from its index. Next: M10.
+  summarizes a store from its index.
+- **M10 under way.** The borg measurement (see M10) is running on the
+  real store: a baseline snapshot is taken, the second follows a few days
+  of syncing.
 
 ## Tooling
 
@@ -559,6 +562,15 @@ and a message moved between folders is matched without re-downloading.
 - A script that measures goal 1 directly: create a store, `borg create`,
   sync a day's mail, `borg create` again, and report the deduplicated size
   added. It should be close to the size of the new mail.
+  The script is a local tool, kept out of the repository. Each snapshot
+  holds the store lock, lists the store's files and compares what is new
+  since the previous one (new files, bytes appended, files rewritten in
+  place) with the archive's deduplicated size, with borg compression off
+  so the two compare directly. The expected excess is borg re-chunking
+  the old tail of each file that grew: up to one chunk (2 MiB on average,
+  8 MiB at most, never more than the old file) per grown segment or
+  journal. Any file rewritten or removed outside `incoming/` and
+  `sync.json` is reported as a breach of the append-only rule.
 - `compact` stays out of scope; `verify` reports orphaned attachments.
 - If a first sync is still too slow: measure first. Downloads were the
   bottleneck (see M8, "download speed"), far ahead of ingest; only if
@@ -566,6 +578,22 @@ and a message moved between folders is matched without re-downloading.
   (parse, classify, strip, check) run in worker processes and a commit
   step in the main one.
 - First release (JMAP only; does not wait for M9).
+
+## Open points
+
+Not scheduled in any milestone; to take up when they matter.
+
+- A held file kept because its segment record is damaged stays held for
+  good and is reported at every evaluation. Recovering it needs a second
+  record of the same message (or `compact`).
+- sqlite's "database is locked" (5 s timeout) propagates: a long index
+  catch-up could make `show`/`search` fail.
+- `show` of a held message fails if a sync promotes it between the index
+  update and the read (DESIGN.md: run again). A retry would be simple.
+- Search lacks OR/grouping, `account:` and flag terms (`is:unread`), and
+  `show` does not print the thread.
+- The fault-injection tests take most of the suite's ~2 minutes; they
+  could be marked slow.
 
 ## Order and gates
 

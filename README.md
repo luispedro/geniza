@@ -20,12 +20,12 @@ that is
 
 geniza never modifies the server: it only reads.
 
-> **Status: under development, not yet usable for archiving.** The store
-> works: messages can be ingested (for now only from local files, for
-> testing), shown, exported and verified. Sync and search do not exist
-> yet. The first release will support JMAP, with Fastmail as the
-> reference server; IMAP comes after it. See [`PLAN.md`](PLAN.md) for
-> where things stand.
+> **Status: under development, not yet released.** JMAP sync (tested
+> against Fastmail), search, `show`, `export --mbox` and `verify` work,
+> but the store has not yet been run for long enough to be trusted as
+> your only copy. The first release will support JMAP, with Fastmail as
+> the reference server; IMAP comes after it. See [`PLAN.md`](PLAN.md)
+> for where things stand.
 
 ## How it works
 
