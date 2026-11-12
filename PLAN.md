@@ -35,9 +35,10 @@ design leaves open.
   parallel downloads over kept connections. The "done when" holds on a
   real Fastmail account (see M8, "the real run"). `geniza info`
   summarizes a store from its index.
-- **M10 under way.** The borg measurement (see M10) is running on the
-  real store: a baseline snapshot is taken, the second follows a few days
-  of syncing.
+- **M10 under way.** The borg measurement (see M10) on the real store
+  holds within a month: after days of syncing, borg adds about the new
+  data and nothing outside `incoming/` and `sync.json` changed. A
+  snapshot across a month boundary (sealing) is still to come.
 
 ## Tooling
 
@@ -571,6 +572,14 @@ and a message moved between folders is matched without re-downloading.
   8 MiB at most, never more than the old file) per grown segment or
   journal. Any file rewritten or removed outside `incoming/` and
   `sync.json` is reported as a breach of the append-only rule.
+  Within a month (November 2026, the store initialized), incremental
+  snapshots behave as designed: each takes seconds, only the month's
+  segment and journal grow, everything else is new files, and borg adds
+  what is new to within the re-chunking allowance, sometimes a little
+  less (it also deduplicates identical base64 attachments across
+  `incoming/` messages, which geniza keeps raw). No append-only breach.
+  Still to check: a snapshot after the month ends (the first sealed
+  month, new segment and attachment directories).
 - `compact` stays out of scope; `verify` reports orphaned attachments.
 - If a first sync is still too slow: measure first. Downloads were the
   bottleneck (see M8, "download speed"), far ahead of ingest; only if
